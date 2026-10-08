@@ -1,0 +1,125 @@
+<!-- SPDX-License-Identifier: MIT -->
+# just-sqlite-sync
+
+Sync for SQLite databases that belong to **one person and live on many devices** — a desktop, a
+laptop, a phone, a tablet. Every device keeps the whole database and works with no network; when
+two devices meet, they swap the changes the other one lacks. Changes travel three ways:
+
+- **a file carried by hand** — export, send it any way you like, import (it merges);
+- **a shared folder** — a Dropbox or OneDrive folder, each device writing only its own files;
+- **HTTP** — another device or a server (the same Wi-Fi, a Tailscale/ZeroTier address, a rented
+  machine).
+
+Plain JavaScript (ES modules), no native code of its own. It runs on Node over
+[better-sqlite3](https://github.com/WiseLibs/better-sqlite3) and in a browser or phone webview over
+the [official SQLite WASM build](https://sqlite.org/wasm) (its `opfs-sahpool` storage keeps the
+file inside the app). MIT. Package name `@delebash/sqlite-sync` — an internal library of the
+JustWrite/JustVoice family, consumed as `"@delebash/sqlite-sync": "file:../just-sqlite-sync"`.
+
+## How it works
+
+1. **Recording.** Triggers on each synced table note every changed field with a **stamp** from a
+   hybrid logical clock (wall time + a counter + the device's id — sortable, never equal between
+   devices). Only the newest stamp per field is kept: storage doesn't grow with history.
+2. **Merging.** For each field, **the newer stamp wins**. A **delete** beats older edits; a newer
+   insert brings the row back. A **rich-text column** (a scene, a note) merges edit by edit
+   through [Yjs](https://yjs.dev), so a paragraph added on the phone and a typo fixed on the desktop
+   both survive. A row whose parent another device deleted goes too, as the foreign key's cascade
+   would have done — and that's recorded, so every device ends the same.
+3. **What each device has.** Every change keeps its origin (device, sequence). A device's
+   **vector** says, per origin, the highest sequence it holds; "what do you lack" is a comparison of
+   vectors, so nothing is sent back where it came from, and a device relays what it got from others.
+
+The promise, tested: whatever devices do and in whatever order they sync, they end identical
+(`tests/convergence.test.js` — thousands of seeded random runs with edits, deletes, cascades,
+re-inserts, key changes and text edits on three devices; `tests/wasm.test.js` — a better-sqlite3
+desktop and a SQLite WASM phone).
+
+The reasoning, the alternatives rejected and the limits: [`docs/design.md`](docs/design.md). The
+change file byte by byte: [`docs/file-format.md`](docs/file-format.md).
+
+## Quick start (Node)
+
+```js
+import Database from "better-sqlite3";
+import { betterSqlite3Adapter, openSync, plainTextAdapter, syncWithPeer, folderSync, encodeFile, decodeFile } from "@delebash/sqlite-sync";
+import { nodeFolder } from "@delebash/sqlite-sync/node-folder";
+
+const db = new Database("library.db");
+db.pragma("foreign_keys = ON");
+const sync = openSync(betterSqlite3Adapter(db), {
+  app: "myapp",                    // batches from another app are refused
+  schemaVersion: 3,                // batches from a newer schema are refused ("update the app")
+  deviceId: storedOutsideTheDb,    // optional: a copied database file then becomes a new device
+  deviceName: "Dan's laptop",
+  tables: {
+    projects: {},
+    chapters: {},
+    scenes: { text: { body: plainTextAdapter() } }, // body merges edit by edit
+    images: { exclude: ["thumbnail"] },             // a column kept per device
+  },
+});
+
+// 1 · over HTTP with another device or a server
+await syncWithPeer(sync, { url: "http://192.168.1.20:17495/v1/sync", token, join: firstTime });
+
+// 2 · through a shared folder (each device reads the others' files, writes its own)
+const key = libraryKey; // generateLibraryKey() once, then shared with each device (a QR code)
+await folderSync(sync, nodeFolder("C:/Users/dan/Dropbox/Apps/MyApp"), { key }).sync();
+
+// 3 · by hand: a file of some books, merged wherever it's imported
+const bytes = await encodeFile(sync.changesSince({}, { scope: (table, pk) => pickedBooks.has(pk[0]) }), { key });
+sync.apply(await decodeFile(bytes, { key }));
+```
+
+The server side of HTTP sync is three routes; on Fastify:
+
+```js
+import { registerSyncRoutes } from "@delebash/sqlite-sync/fastify";
+registerSyncRoutes(app, () => sync, { prefix: "/v1/sync" }); // your auth hook protects the prefix
+```
+
+In a webview, open the database with the WASM build (usually in a worker) and use
+`sqliteWasmAdapter(db)` in place of `betterSqlite3Adapter(db)`; everything else is the same.
+
+## The API
+
+| | |
+|---|---|
+| `openSync(adapter, options)` | Opens sync on a database: creates its tables (`sync_*`), the triggers, and adopts rows that existed before. Returns the `sync` object. |
+| `sync.changesSince(vector, { scope })` | The changes a device holding `vector` lacks, as a batch. `{}` = everything. `scope(table, pkValues)` keeps only some rows (a by-hand export); such a batch is *partial* and advances nobody's vector. |
+| `sync.apply(batch, { join })` | Applies a batch in one transaction. Refuses another app, another library (unless `join` — pairing a new device), a newer schema, and stamps more than a day in the future (a device with a wrong clock). Returns `{ applied, skipped, rows, tables, problems }`. |
+| `sync.vector()` | This device's vector. |
+| `sync.library` / `sync.device` / `sync.deviceName` | Identity. `setDeviceName(name)`, `joinLibrary(id)`. |
+| `sync.peers()` | The devices and places this one has synced with, newest first. |
+| `syncWithPeer(sync, { url, token, join })` | Pull then push with another device's routes. |
+| `createSyncHandlers(sync)` | The three routes' bodies for any web framework (`hello`, `pull`, `push`). |
+| `folderSync(sync, store, { key, snapshotEvery })` | `.sync()`, `.pull()`, `.push()`, `.libraries()` (for "join the library in this folder"), `.removeDevice(id)`. `store` is `{ list, read, write, remove }`; `nodeFolder(dir)` is the disk one. |
+| `encodeFile(batch, { key })` / `decodeFile(bytes, { key })` / `readFileHeader(bytes)` | The change file; with `key`, AES-256-GCM. `generateLibraryKey()` makes a key. |
+| `plainTextAdapter()` | Rich-text merging for a plain-text column. Other kinds (HTML from an editor) bring their own adapter: `{ apply(ydoc, value), render(ydoc) }`. |
+
+Errors are `SyncError` with a `code`: `library-mismatch`, `schema-too-new`, `clock-drift`,
+`bad-file`, `wrong-key`, `bad-config`, `peer`.
+
+## Rules for a synced table
+
+- **A primary key, and ids unique across devices.** Use random ids (UUIDs or similar), never
+  `AUTOINCREMENT` — two devices would both make row 7. Primary-key columns hold text or integers.
+- **Foreign keys work as they are** — including `ON DELETE CASCADE` and `NOT NULL` columns
+  without defaults (unlike cr-sqlite, which refuses both).
+- **Per-device columns** go in `exclude`. Tables that shouldn't sync (settings, caches, search
+  indexes) simply aren't listed.
+- **Schema changes:** reopen with the new `schemaVersion` after migrating; the triggers rebuild
+  themselves when a table's shape changes. Devices on an older schema refuse the newer one's
+  batches until updated.
+
+## Develop
+
+```bash
+npm install
+npm test          # vitest: engine, convergence, text, files, folders, HTTP, SQLite WASM
+npm run lint      # Biome
+```
+
+Every file carries an SPDX header. Open work: [`docs/dev/TASKS.md`](docs/dev/TASKS.md); facts with
+their proof: [`docs/dev/RESEARCH.md`](docs/dev/RESEARCH.md).
