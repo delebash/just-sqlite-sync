@@ -26,10 +26,16 @@ function wasmDevice(name) {
       return {
         all: (...p) => db.selectObjects(sql, p.length ? p.map(norm) : undefined),
         get: (...p) => db.selectObject(sql, p.length ? p.map(norm) : undefined),
-        run: (...p) => db.exec({ sql, bind: p.length ? p.map(norm) : undefined }),
+        run: (...p) => {
+          db.exec({ sql, bind: p.length ? p.map(norm) : undefined });
+          sync.flush(); // an app flushes after its saves
+        },
       };
     },
-    exec: (sql) => db.exec(sql),
+    exec: (sql) => {
+      db.exec(sql);
+      sync.flush();
+    },
     pragma: (p) => db.selectObjects(`PRAGMA ${p}`),
   };
   return { name, db: shim, sync };

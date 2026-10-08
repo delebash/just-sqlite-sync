@@ -37,15 +37,55 @@ export function setNow(t) {
   clockNow = t;
 }
 
+/**
+ * A database handle that calls sync.flush() after every write — what an app does after its
+ * saves, so stamps follow the order edits were made in.
+ */
+function flushingDb(db, getSync) {
+  const flush = () => getSync()?.flush();
+  return new Proxy(db, {
+    get(target, prop) {
+      if (prop === "exec") {
+        return (sql) => {
+          const r = target.exec(sql);
+          flush();
+          return r;
+        };
+      }
+      if (prop === "prepare") {
+        return (sql) => {
+          const st = target.prepare(sql);
+          return new Proxy(st, {
+            get(t, p) {
+              if (p === "run") {
+                return (...args) => {
+                  const r = t.run(...args);
+                  flush();
+                  return r;
+                };
+              }
+              const v = t[p];
+              return typeof v === "function" ? v.bind(t) : v;
+            },
+          });
+        };
+      }
+      const v = target[prop];
+      return typeof v === "function" ? v.bind(target) : v;
+    },
+  });
+}
+
 export function makeDevice(name, { deviceId, file = ":memory:", schemaVersion = 1, raw, tables = TABLES } = {}) {
-  const db = raw ?? new Database(file);
+  const base = raw ?? new Database(file);
   if (!raw) {
-    db.pragma("foreign_keys = ON");
-    db.exec(SCHEMA);
+    base.pragma("foreign_keys = ON");
+    base.exec(SCHEMA);
   }
-  const adapter = betterSqlite3Adapter(db);
+  const adapter = betterSqlite3Adapter(base);
   const sync = openSync(adapter, { app: "testapp", schemaVersion, tables, deviceId: deviceId ?? `dev-${name}`, deviceName: name, now });
-  return { name, db, adapter, sync };
+  const db = flushingDb(base, () => sync);
+  return { name, db, raw: base, adapter, sync };
 }
 
 /** Everything a user would see: the synced tables' rows, in a stable order. */

@@ -1,4 +1,8 @@
 // SPDX-License-Identifier: MIT
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import Database from "better-sqlite3";
 import { describe, expect, it } from "vitest";
 import { LIBRARY_MISMATCH, SCHEMA_TOO_NEW, CLOCK_DRIFT } from "../src/index.js";
 import { dump, exchange, makeDevice, setNow } from "./helpers.js";
@@ -43,16 +47,48 @@ describe("recording changes", () => {
     const a = makeDevice("a");
     a.db.exec("INSERT INTO settings VALUES ('x', 'y')"); // not synced: never recorded
     seed(a);
-    const raw = a.db;
+    const raw = a.raw;
     const again = makeDevice("a2", { raw, deviceId: "dev-a" });
     expect(again.sync.changesSince({}).changes.length).toBe(a.sync.changesSince({}).changes.length);
+  });
+
+  it("a write from another connection is noted too (a restore, a script, a database browser)", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "sqlite-sync-conn-"));
+    try {
+      const file = path.join(dir, "lib.db");
+      const a = makeDevice("a", { file });
+      seed(a);
+      const before = a.sync.seq;
+      const other = new Database(file); // no engine, no functions registered on it
+      other.pragma("foreign_keys = ON");
+      other.exec("UPDATE chapters SET title = 'Written elsewhere' WHERE id = 'c1'; DELETE FROM chapters WHERE id = 'c2';");
+      other.close();
+      const delta = a.sync.changesSince({ "dev-a": before });
+      expect(delta.changes.map((c) => [c.k, c.c, c.v]).sort()).toEqual([
+        ['["p1","c1"]', "title", "Written elsewhere"],
+        ['["p1","c2"]', "-", 0],
+      ]);
+      a.raw.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("a table dropped and created again gets its triggers back on the next open", () => {
+    const a = makeDevice("a");
+    seed(a);
+    a.raw.exec("DROP TABLE scenes; CREATE TABLE scenes (project_id TEXT NOT NULL, id TEXT NOT NULL, chapter_id TEXT NOT NULL, position INTEGER NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY (project_id, id), FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE)");
+    const again = makeDevice("a", { raw: a.raw, deviceId: "dev-a" });
+    const before = again.sync.seq;
+    again.db.exec("INSERT INTO scenes VALUES ('p1', 's9', 'c1', 0, 'New', 'Text.')");
+    expect(again.sync.changesSince({ "dev-a": before }).changes.some((c) => c.k === '["p1","s9"]')).toBe(true);
   });
 
   it("a table without a primary key, or a missing table, is refused", () => {
     const a = makeDevice("a");
     a.db.exec("CREATE TABLE loose (x TEXT)");
-    expect(() => makeDevice("a2", { raw: a.db, tables: { loose: {} } })).toThrow(/no primary key/);
-    expect(() => makeDevice("a3", { raw: a.db, tables: { nothere: {} } })).toThrow(/doesn't exist/);
+    expect(() => makeDevice("a2", { raw: a.raw, tables: { loose: {} } })).toThrow(/no primary key/);
+    expect(() => makeDevice("a3", { raw: a.raw, tables: { nothere: {} } })).toThrow(/doesn't exist/);
   });
 });
 
@@ -174,7 +210,7 @@ describe("refusals", () => {
 describe("devices", () => {
   it("a database opened under a new device id continues as a new device", () => {
     const { a, b } = pair();
-    const copy = makeDevice("copy", { raw: b.db, deviceId: "dev-copy" });
+    const copy = makeDevice("copy", { raw: b.raw, deviceId: "dev-copy" });
     expect(copy.sync.device).toBe("dev-copy");
     copy.db.exec("UPDATE chapters SET title = 'from the copy' WHERE id = 'c1'");
     exchange(a, copy);

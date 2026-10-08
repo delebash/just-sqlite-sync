@@ -18,9 +18,11 @@ JustWrite/JustVoice family, consumed as `"@delebash/sqlite-sync": "file:../just-
 
 ## How it works
 
-1. **Recording.** Triggers on each synced table note every changed field with a **stamp** from a
-   hybrid logical clock (wall time + a counter + the device's id — sortable, never equal between
-   devices). Only the newest stamp per field is kept: storage doesn't grow with history.
+1. **Recording.** Plain-SQL triggers on each synced table note every changed field — from any
+   connection, so a restore or a script is caught too — and `sync.flush()` gives each a **stamp**
+   from a hybrid logical clock (wall time + a counter + the device's id — sortable, never equal
+   between devices). Only the newest stamp per field is kept: storage doesn't grow with history.
+   Call `flush()` after your saves (it also runs before every sync).
 2. **Merging.** For each field, **the newer stamp wins**. A **delete** beats older edits; a newer
    insert brings the row back. A **rich-text column** (a scene, a note) merges edit by edit
    through [Yjs](https://yjs.dev), so a paragraph added on the phone and a typo fixed on the desktop
@@ -117,6 +119,7 @@ way.
 | `openSync(adapter, options)` | Opens sync on a database: creates its tables (`sync_*`), the triggers, and adopts rows that existed before. Returns the `sync` object. |
 | `sync.changesSince(vector, { scope })` | The changes a device holding `vector` lacks, as a batch. `{}` = everything. `scope(table, pkValues)` keeps only some rows (a by-hand export); such a batch is *partial* and advances nobody's vector. |
 | `sync.apply(batch, { join })` | Applies a batch in one transaction. Refuses another app, another library (unless `join` — pairing a new device), a newer schema, and stamps more than a day in the future (a device with a wrong clock). Returns `{ applied, skipped, rows, tables, problems }`. |
+| `sync.flush()` | Stamps the changes the triggers noted since the last flush. Call it after your saves (an `onResponse` hook on write routes is one place); it also runs before every read or apply. |
 | `sync.vector()` | This device's vector. |
 | `sync.library` / `sync.device` / `sync.deviceName` | Identity. `setDeviceName(name)`, `joinLibrary(id)`. |
 | `sync.peers()` | The devices and places this one has synced with, newest first. |

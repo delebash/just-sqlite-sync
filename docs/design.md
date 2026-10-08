@@ -39,14 +39,23 @@ state) · `sync_clock` (per synced field: newest stamp, origin device, origin se
 `sync_text` (per rich-text field: its Yjs state and the stamp it was brought up to) · `sync_peers`
 (devices and places synced with).
 
-### 3.2 Recording: triggers, history-free
+### 3.2 Recording: pure-SQL triggers, stamped by flush, history-free
 
-`AFTER INSERT / UPDATE / DELETE` triggers, generated from the table list, upsert one `sync_clock`
-row per changed field (the update trigger compares `OLD.c IS NOT NEW.c`). A key change is a delete
-plus an insert. Stamps and sequences come from SQL functions registered in JavaScript; the
-triggers keep the sequence in `sync_meta`. Only the newest change per field is kept and the value
-is the row itself, so the cost doesn't grow with history (a full log cost 10× the write time in a
-test; this design about 2.5×, like cr-sqlite's). Two SQLite facts the triggers respect:
+`AFTER INSERT / UPDATE / DELETE` triggers, generated from the table list, note each changed field
+in `sync_pending` (one row per field, however often it changes; the update trigger compares
+`OLD.c IS NOT NEW.c`; a key change is a delete plus an insert; a delete drops the row's field
+stamps at once). **The triggers are pure SQL** — no function registered from JavaScript — so a
+write from *any* connection is noted: the app's, the kit's restore (which opens its own
+connection and rewrites the tables), a migration script, a database browser. A first version
+called JavaScript functions from the triggers; any other connection then failed with "no such
+function". `flush()` stamps the pending fields — each gets the next clock stamp and this device's
+next sequence — and runs before changes are read or applied; an app calls it after its saves so
+stamps follow the order edits were made in. While the engine applies another device's changes it
+sets `sync_flag.applying` inside its transaction, and the triggers stay quiet. Only the newest
+change per field is kept and the value is the row itself, so the cost doesn't grow with history (a
+full log cost 10× the write time in a test; this design is cr-sqlite's shape, about 2.5×). Triggers
+are rebuilt when a table's shape changes and when they're missing (dropping and re-creating a
+table drops its triggers — a data reset does that). Two SQLite facts the triggers respect:
 - **UPSERT, never INSERT OR REPLACE, inside a trigger:** the conflict clause of the statement that
   fired the trigger (an app's `INSERT OR IGNORE`) overrides the trigger's own — an `OR REPLACE`
   would silently keep a stale stamp. Found by the convergence test; UPSERT isn't overridden.

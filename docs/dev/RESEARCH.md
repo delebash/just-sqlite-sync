@@ -13,6 +13,13 @@ This file holds what this repo's code depends on.
   test, seed 1). An UPSERT (`ON CONFLICT … DO UPDATE`) in the trigger worked under `INSERT`,
   `OR IGNORE`, `OR ABORT`, `OR FAIL` and `OR REPLACE` (5 of 5). SQLite's CREATE TRIGGER page states
   the override rule.
+- **A trigger that calls a function registered from JavaScript fails on every other connection**
+  ("no such function") — and the family kit's restore opens its own connection to rewrite the
+  tables (`just-llm-runner/server/src/platform/data_api.js`, `POST /v1/data/restore`: `openDatabase`
+  + `ATTACH` + `DELETE`/`INSERT`). So the triggers are pure SQL and stamping happens in `flush()`;
+  `tests/engine.test.js` "a write from another connection is noted too" checks it (2026-10-08).
+- **Dropping a table drops its triggers** (SQLite) — the kit's data reset drops and re-creates
+  every app table, so the engine checks the triggers exist, not only their hash.
 - **`ON DELETE CASCADE` fires the child tables' delete triggers** (*tested* on a copy of JustWrite's
   database: deleting the book recorded a delete for every row of every child table that had rows;
   `tests/engine.test.js` "a delete beats an older edit…" checks it on every run).

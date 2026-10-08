@@ -11,7 +11,7 @@
 import { randomId, hash52, fromBase64, toBase64 } from "./bytes.js";
 import { createClock } from "./clock.js";
 import { BAD_CONFIG, LIBRARY_MISMATCH, SCHEMA_TOO_NEW, SyncError } from "./errors.js";
-import { ENGINE_SQL, TRIGGER_PREFIX, quoteIdent, triggerSql } from "./schema.js";
+import { ENGINE_SQL, TRIGGERS_PER_TABLE, TRIGGER_PREFIX, quoteIdent, triggerSql } from "./schema.js";
 import { textOps } from "./text.js";
 import { decodeValue, encodeValue } from "./values.js";
 
@@ -77,24 +77,8 @@ export function openSync(db, options) {
   const clock = createClock(device, { now, maxDriftMs });
   clock.seed(db.get("SELECT max(stamp) AS s FROM sync_clock")?.s);
 
-  // --- SQL functions the triggers call --------------------------------------------------------
-  const capturing = true;
-  let applying = false;
-  let curStamp = "";
-  let curSeq = 0;
-  db.fn("sync_on", () => (capturing && !applying ? 1 : 0), { arity: 0 });
-  db.fn(
-    "sync_begin",
-    () => {
-      curStamp = clock.tick();
-      curSeq = ++seq;
-      return curSeq;
-    },
-    { arity: 0 },
-  );
-  db.fn("sync_stamp", () => curStamp, { arity: 0 });
-  db.fn("sync_seq", () => curSeq, { arity: 0 });
-  db.fn("sync_device", () => device, { arity: 0 });
+  // --- while this device applies another's changes, the triggers stay quiet (sync_flag) -----
+  const setApplying = (on) => db.run("UPDATE sync_flag SET applying = ? WHERE id = 1", [on ? 1 : 0]);
 
   // --- tables ---------------------------------------------------------------------------------
   const info = {};
@@ -139,22 +123,53 @@ export function openSync(db, options) {
   }
   const fksOn = () => Number(db.get("PRAGMA foreign_keys")?.foreign_keys ?? 0) === 1;
 
-  // --- triggers (rebuilt when the tables' shape changes) -------------------------------------
+  // --- triggers (rebuilt when the tables' shape changes, or when they're gone — dropping and
+  // re-creating a table drops its triggers) --------------------------------------------------
   const allTriggerSql = Object.values(info)
     .map((t) => triggerSql(t.name, t))
     .join("\n");
   const triggerHash = String(hash52(`v${FORMAT_VERSION}\n${allTriggerSql}`));
-  if (getMeta("triggers") !== triggerHash) {
+  const ours = () => db.all("SELECT name FROM sqlite_master WHERE type = 'trigger' AND substr(name, 1, ?) = ?", [TRIGGER_PREFIX.length, TRIGGER_PREFIX]);
+  if (getMeta("triggers") !== triggerHash || ours().length !== Object.keys(info).length * TRIGGERS_PER_TABLE) {
     db.transaction(() => {
-      for (const { name } of db.all("SELECT name FROM sqlite_master WHERE type = 'trigger' AND substr(name, 1, ?) = ?", [TRIGGER_PREFIX.length, TRIGGER_PREFIX])) {
-        db.exec(`DROP TRIGGER IF EXISTS ${quoteIdent(name)}`);
-      }
+      for (const { name } of ours()) db.exec(`DROP TRIGGER IF EXISTS ${quoteIdent(name)}`);
       db.exec(allTriggerSql);
       setMeta("triggers", triggerHash);
     });
   }
 
+  /**
+   * Stamp the changes the triggers noted (from any connection) as this device's own: each field
+   * gets the next clock stamp and sequence. Runs before changes are read or applied; an app calls
+   * it after its saves so stamps follow the order edits were made in.
+   * @returns {number} how many fields were stamped
+   */
+  function flush() {
+    const pending = db.all("SELECT tbl, pk, col, alive FROM sync_pending");
+    if (!pending.length) return 0;
+    db.transaction(() => {
+      for (const p of pending) {
+        if (!info[p.tbl]) continue;
+        const stamp = clock.tick();
+        const n = ++seq;
+        db.run("INSERT OR REPLACE INTO sync_clock (tbl, pk, col, stamp, origin, oseq, alive) VALUES (?, ?, ?, ?, ?, ?, ?)", [
+          p.tbl,
+          p.pk,
+          p.col,
+          stamp,
+          device,
+          n,
+          p.col === "-" ? p.alive : null,
+        ]);
+      }
+      db.run("DELETE FROM sync_pending");
+      setMeta("seq", seq);
+    });
+    return pending.length;
+  }
+
   // --- adopt rows that exist but were never recorded (first open; a newly synced table) -------
+  flush();
   adoptExisting();
 
   function adoptExisting() {
@@ -231,7 +246,10 @@ export function openSync(db, options) {
    *   scope: only rows it accepts (a by-hand export of some books) — the batch is then partial
    */
   function changesSince(peerVector = {}, opts = {}) {
-    db.transaction(() => reconcileText());
+    db.transaction(() => {
+      flush();
+      reconcileText();
+    });
     const sql = `SELECT c.tbl, c.pk, c.col, c.stamp, c.origin, c.oseq, c.alive FROM sync_clock c
                    LEFT JOIN json_each(?) v ON v.key = c.origin
                   WHERE c.oseq > coalesce(v.value, 0)
@@ -308,16 +326,15 @@ export function openSync(db, options) {
     }
     const stats = { applied: 0, skipped: 0, rows: 0, problems: [], tables: new Set() };
     db.transaction(() => {
-      reconcileText();
-      for (const ch of batch.changes) {
-        clock.observe(ch.s);
-        // This device's own changes coming back (a database rebuilt from its own files, a
-        // peer returning what it got): the sequence continues past them, or new changes would
-        // reuse numbers other devices already hold and be skipped there.
-        if (ch.o === device && ch.n > seq) seq = ch.n;
-      }
+      // This device's own changes coming back (a database rebuilt from its own files, a peer
+      // returning what it got): the sequence continues past them BEFORE anything is stamped, or
+      // new changes would reuse numbers other devices already hold and be skipped there.
+      for (const ch of batch.changes) if (ch.o === device && ch.n > seq) seq = ch.n;
       if (!batch.partial && (batch.vector?.[device] ?? 0) > seq) seq = batch.vector[device];
-      applying = true;
+      flush();
+      reconcileText();
+      for (const ch of batch.changes) clock.observe(ch.s);
+      setApplying(true);
       try {
         db.exec("PRAGMA defer_foreign_keys = ON");
         const groups = new Map();
@@ -331,6 +348,7 @@ export function openSync(db, options) {
         const incomingDelete = (tbl, k) => groups.get(`${tbl}\u0000${k}`)?.latest.get("-")?.v === 0;
         for (const g of groups.values()) applyRow(g, stats, incomingDelete);
         if (fksOn()) removeOrphans(stats);
+        flush(); // the orphans this device removed, as its own changes
         if (!batch.partial) {
           for (const [origin, n] of Object.entries(batch.vector || {})) {
             if (origin === device) continue;
@@ -339,7 +357,7 @@ export function openSync(db, options) {
         }
         setMeta("seq", seq);
       } finally {
-        applying = false;
+        setApplying(false);
       }
     });
     return { ...stats, tables: [...stats.tables] };
@@ -390,7 +408,7 @@ export function openSync(db, options) {
           `SELECT json_array(${ct.pk.map((c) => `c.${quoteIdent(c)}`).join(", ")}) AS k FROM ${ct.Q} c WHERE ${set} AND NOT EXISTS (SELECT 1 FROM ${pt.Q} p WHERE ${match})`,
         );
         if (!orphans.length) continue;
-        applying = false; // record these as this device's own changes
+        setApplying(false); // noted as this device's own changes
         try {
           for (const { k } of orphans) {
             if (fk.onDelete === "SET NULL") {
@@ -401,7 +419,7 @@ export function openSync(db, options) {
             stats.rows++;
           }
         } finally {
-          applying = true;
+          setApplying(true);
         }
       }
     }
@@ -580,6 +598,7 @@ export function openSync(db, options) {
     vector,
     changesSince,
     apply,
+    flush,
     recordPeer,
     peers: () => db.all("SELECT id, name, kind, last_sync AS lastSync, info FROM sync_peers ORDER BY last_sync DESC").map((p) => ({ ...p, info: p.info ? JSON.parse(p.info) : null })),
     setDeviceName(name) {
