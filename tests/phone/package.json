@@ -1,0 +1,19 @@
+{
+  "name": "sqlite-sync-phone-test",
+  "private": true,
+  "type": "module",
+  "description": "A Capacitor app that runs the sync engine inside a phone's webview on the official SQLite WASM build over OPFS, and reports by console. run-android.js drives it on an emulator; .github/workflows/phone-ios.yml on the iOS simulator.",
+  "scripts": {
+    "build": "node build.js"
+  },
+  "dependencies": {
+    "@capacitor/android": "8.5.3",
+    "@capacitor/cli": "8.5.3",
+    "@capacitor/core": "8.5.3",
+    "@capacitor/ios": "8.5.3",
+    "@sqlite.org/sqlite-wasm": "3.53.4-build2"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

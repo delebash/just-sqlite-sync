@@ -309,7 +309,14 @@ export function openSync(db, options) {
     const stats = { applied: 0, skipped: 0, rows: 0, problems: [], tables: new Set() };
     db.transaction(() => {
       reconcileText();
-      for (const ch of batch.changes) clock.observe(ch.s);
+      for (const ch of batch.changes) {
+        clock.observe(ch.s);
+        // This device's own changes coming back (a database rebuilt from its own files, a
+        // peer returning what it got): the sequence continues past them, or new changes would
+        // reuse numbers other devices already hold and be skipped there.
+        if (ch.o === device && ch.n > seq) seq = ch.n;
+      }
+      if (!batch.partial && (batch.vector?.[device] ?? 0) > seq) seq = batch.vector[device];
       applying = true;
       try {
         db.exec("PRAGMA defer_foreign_keys = ON");

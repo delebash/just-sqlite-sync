@@ -11,6 +11,7 @@ export { encodeFile, decodeFile, readFileHeader, generateLibraryKey } from "./fi
 export { betterSqlite3Adapter } from "./adapters/better-sqlite3.js";
 export { sqliteWasmAdapter } from "./adapters/sqlite-wasm.js";
 export { folderSync } from "./transports/folder.js";
+export { oneDriveAppFolder, dropboxAppFolder } from "./transports/cloud.js";
 export { createSyncHandlers, syncWithPeer } from "./transports/http.js";
 export {
   SyncError,

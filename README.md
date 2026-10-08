@@ -82,6 +82,34 @@ registerSyncRoutes(app, () => sync, { prefix: "/v1/sync" }); // your auth hook p
 In a webview, open the database with the WASM build (usually in a worker) and use
 `sqliteWasmAdapter(db)` in place of `betterSqlite3Adapter(db)`; everything else is the same.
 
+### On a phone
+
+```js
+import sqlite3InitModule from "@sqlite.org/sqlite-wasm";
+import { dropboxAppFolder, folderSync, oneDriveAppFolder, openSync, sqliteWasmAdapter } from "@delebash/sqlite-sync";
+
+const sqlite3 = await sqlite3InitModule();                       // in a worker
+const pool = await sqlite3.installOpfsSAHPoolVfs({ name: "myapp" });
+const db = new pool.OpfsSAHPoolDb("/library.db");
+const sync = openSync(sqliteWasmAdapter(db), { app: "myapp", tables, deviceId });
+
+// the cloud folder, through the service's own API (the phone has no synced folder on disk):
+// the app folder is Apps/<your app> — the same folder the desktop sees inside its Dropbox/OneDrive
+const cloud = oneDriveAppFolder({ getToken: () => currentAccessToken() }); // or dropboxAppFolder(...)
+await folderSync(sync, cloud, { key }).sync();
+
+// the storage guard: webview storage is best-effort (Android's WebView always refuses
+// persist()), so also write this device's files to the app's native data folder…
+await folderSync(sync, nativeFolderStore, { key }).push();          // after saves
+// …and if the database is ever found empty, rebuild it from them:
+await folderSync(sync, nativeFolderStore, { key }).restore();
+```
+
+Signing in to OneDrive (Microsoft Graph, scope `Files.ReadWrite.AppFolder`) or Dropbox ("App
+folder" access) is the app's job — in the system browser with PKCE; the stores only need a current
+access token. A store is any `{ list, read, write, remove }` object, so other services fit the same
+way.
+
 ## The API
 
 | | |
@@ -94,7 +122,7 @@ In a webview, open the database with the WASM build (usually in a worker) and us
 | `sync.peers()` | The devices and places this one has synced with, newest first. |
 | `syncWithPeer(sync, { url, token, join })` | Pull then push with another device's routes. |
 | `createSyncHandlers(sync)` | The three routes' bodies for any web framework (`hello`, `pull`, `push`). |
-| `folderSync(sync, store, { key, snapshotEvery })` | `.sync()`, `.pull()`, `.push()`, `.libraries()` (for "join the library in this folder"), `.removeDevice(id)`. `store` is `{ list, read, write, remove }`; `nodeFolder(dir)` is the disk one. |
+| `folderSync(sync, store, { key, snapshotEvery })` | `.sync()`, `.pull()`, `.push()`, `.restore()` (rebuild this device from its own files), `.libraries()` (for "join the library in this folder"), `.removeDevice(id)`. `store` is `{ list, read, write, remove }`: `nodeFolder(dir)` on disk, `oneDriveAppFolder({ getToken })`, `dropboxAppFolder({ getToken })`. |
 | `encodeFile(batch, { key })` / `decodeFile(bytes, { key })` / `readFileHeader(bytes)` | The change file; with `key`, AES-256-GCM. `generateLibraryKey()` makes a key. |
 | `plainTextAdapter()` | Rich-text merging for a plain-text column. Other kinds (HTML from an editor) bring their own adapter: `{ apply(ydoc, value), render(ydoc) }`. |
 
@@ -117,9 +145,15 @@ Errors are `SyncError` with a `code`: `library-mismatch`, `schema-too-new`, `clo
 
 ```bash
 npm install
-npm test          # vitest: engine, convergence, text, files, folders, HTTP, SQLite WASM
+npm test          # vitest: engine, convergence, text, files, folders, cloud stores, HTTP, SQLite WASM
 npm run lint      # Biome
 ```
+
+**On a real phone engine:** `tests/phone/` is a Capacitor app whose worker runs the engine on SQLite
+WASM over OPFS, syncs a persistent device with a fresh one, and times autosaves; it's launched
+fresh, relaunched, and reinstalled over itself (an app update), and each launch must find the
+earlier ones. `cd tests/phone && npm install && node run-android.js` runs it on an Android emulator
+or phone over adb; `.github/workflows/phone-ios.yml` runs it on GitHub's iOS simulator.
 
 Every file carries an SPDX header. Open work: [`docs/dev/TASKS.md`](docs/dev/TASKS.md); facts with
 their proof: [`docs/dev/RESEARCH.md`](docs/dev/RESEARCH.md).

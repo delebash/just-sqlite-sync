@@ -142,6 +142,41 @@ export function folderSync(sync, store, { key, snapshotEvery = 100, name = "fold
       return { pulled, pushed };
     },
     writeSnapshot,
+    /**
+     * Rebuild this device's database from its own files (the phone's storage guard: the files
+     * were also written to the app's native folder, which the webview's storage pressure can't
+     * clear). Applies its newest snapshot and the change files after it. Returns the number of
+     * files applied, or null when this folder holds nothing of this device.
+     */
+    async restore() {
+      let lib = null;
+      for (const l of await store.list("")) {
+        if ((await store.list(l)).includes(sync.device)) {
+          lib = l;
+          break;
+        }
+      }
+      if (!lib) return null;
+      if (lib !== sync.library) sync.joinLibrary(lib);
+      const { changes, snapshots } = parseNames(await store.list(dir()));
+      let read = 0;
+      let files = 0;
+      const snap = snapshots[snapshots.length - 1];
+      if (snap) {
+        sync.apply(await readFile(`${dir()}/${snap.name}`));
+        read = snap.n;
+        files++;
+      }
+      for (const c of changes) {
+        if (c.n <= read) continue;
+        sync.apply(await readFile(`${dir()}/${c.name}`));
+        read = c.n;
+        files++;
+      }
+      sync.setState("folder.fileNo", Math.max(read, sync.getState("folder.fileNo") ?? 0));
+      sync.setState("folder.pushVector", sync.vector());
+      return files;
+    },
     /** The libraries in this folder and their devices — for "join the library in this folder". */
     async libraries() {
       const out = [];

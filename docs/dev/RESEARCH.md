@@ -30,6 +30,31 @@ This file holds what this repo's code depends on.
   `opfs-sahpool`, the database survived a force-stop and an app update (*tested* 2026-10-08, kit
   RESEARCH "Sync, round 2").
 
+## The engine on a phone
+
+- **Android, tested 2026-10-08** (`tests/phone`, Capacitor 8.5.3, Android 16 emulator, WebView
+  133.0.6943.137, `@sqlite.org/sqlite-wasm` 3.53.4-build2 on `opfs-sahpool` in a module worker):
+  the engine with Yjs text merging runs through the synchronous OO1 API; launched fresh, relaunched
+  after a force-stop, and after reinstalling over itself, each launch found the earlier runs, the
+  device's sequence continued (0→204→406→608), and a persistent and a fresh device ended equal with
+  both devices' text edits merged. 200 autosaves of a 7.5 KB scene with recording on: 1.6–1.9 s
+  (8–10 ms a save on the emulator). `persist()` returns false (Android WebView always denies it —
+  the kit's record), hence the storage guard (`folderSync(...).restore()`).
+- **iOS:** `.github/workflows/phone-ios.yml` (GitHub macOS runners, the iOS simulator).
+
+## Cloud APIs (the phone's cloud-folder stores)
+
+- **Microsoft Graph:** `GET /me/drive/special/approot` is the app folder (`Apps/<app>`, scope
+  `Files.ReadWrite.AppFolder`); a JS app downloads through the item's
+  `@microsoft.graph.downloadUrl` because `/content` answers with a redirect CORS forbids (kit
+  record, learn.microsoft.com/en-us/graph/api/driveitem-get-content, 2026-10-08); simple upload
+  `PUT …:/{path}:/content` "only supports files up to 250 MB" (learn.microsoft.com/en-us/graph/api/
+  driveitem-put-content, checked 2026-10-08).
+- **Dropbox:** `files/list_folder` (+ `/continue`) and `files/delete_v2` on the API host,
+  `files/download` and `files/upload` on the content host; upload: "Do not use this to upload a
+  file larger than 150 MiB" (dropbox/dropbox-sdk-js `lib/routes.js`, checked 2026-10-08). A missing
+  path answers 409 with an `error_summary` starting `path/not_found`.
+
 ## Yjs (13.6.33)
 
 - `Y.equalSnapshots(Y.snapshot(a), Y.snapshot(b))` compares both insertions (state vector) and

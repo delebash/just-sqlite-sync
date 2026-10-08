@@ -1,0 +1,6 @@
+{
+  "appId": "org.justfamily.sqlitesynctest",
+  "appName": "Sync test",
+  "webDir": "www",
+  "loggingBehavior": "debug"
+}

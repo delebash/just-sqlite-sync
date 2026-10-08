@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: MIT
+# The phone test on the iOS simulator: the sync engine on the official SQLite WASM build over
+# OPFS inside WKWebView (Capacitor), launched fresh, relaunched, and after an app update.
+name: Phone (iOS simulator)
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["src/**", "tests/phone/**", ".github/workflows/phone-ios.yml"]
+jobs:
+  ios:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci
+      - name: Build the test app
+        working-directory: tests/phone
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
+          npx cap add ios
+          npx cap sync ios
+      - name: Build for the simulator
+        working-directory: tests/phone/ios/App
+        run: |
+          xcodebuild -project App.xcodeproj -scheme App -configuration Debug -sdk iphonesimulator \
+            -derivedDataPath build CODE_SIGNING_ALLOWED=NO build | tail -25
+          echo "APP_PATH=$PWD/build/Build/Products/Debug-iphonesimulator/App.app" >> "$GITHUB_ENV"
+      - name: Boot a simulator
+        run: |
+          UDID=$(xcrun simctl list devices available -j | node -e '
+            let s = ""; process.stdin.on("data", (d) => (s += d)).on("end", () => {
+              const all = Object.entries(JSON.parse(s).devices)
+                .filter(([rt]) => rt.includes("iOS"))
+                .flatMap(([rt, ds]) => ds.map((d) => ({ ...d, rt })))
+                .filter((d) => d.name.startsWith("iPhone"));
+              all.sort((a, b) => (a.rt < b.rt ? 1 : -1));
+              console.log(all[0].udid);
+            });')
+          echo "SIM_UDID=$UDID" >> "$GITHUB_ENV"
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID" -b
+      - name: Run it three times
+        working-directory: tests/phone
+        run: node run-ios.js
