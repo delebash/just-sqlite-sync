@@ -12,8 +12,8 @@ STATE:  DECIDED 2026-10-08 (JustWrite TASKS item 7): the phone also saves its ou
         through signing in to OneDrive, then Dropbox (Google Drive later).
 BUILT:  `oneDriveAppFolder`, `dropboxAppFolder` (tested against fakes of the two APIs),
         `folderSync(...).restore()` (the storage guard), `tests/phone` — the engine on SQLite WASM
-        over OPFS, passing on the Android 16 emulator.
-OPEN:   the iOS simulator run (`phone-ios.yml`) — its first result; a real sign-in against OneDrive
+        over OPFS, passing on the Android 16 emulator and the iOS 18.7 simulator (GitHub macOS).
+OPEN:   a real sign-in against OneDrive
         and Dropbox needs app registrations under the user's accounts (an Azure app id, a Dropbox
         app key) — the stores take a token, the app does the sign-in.
 GO:     given 2026-10-08 ("you have a go on it all your recs").

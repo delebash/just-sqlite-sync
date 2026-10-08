@@ -47,7 +47,10 @@ This file holds what this repo's code depends on.
   both devices' text edits merged. 200 autosaves of a 7.5 KB scene with recording on: 1.6–1.9 s
   (8–10 ms a save on the emulator). `persist()` returns false (Android WebView always denies it —
   the kit's record), hence the storage guard (`folderSync(...).restore()`).
-- **iOS:** `.github/workflows/phone-ios.yml` (GitHub macOS runners, the iOS simulator).
+- **iOS, tested 2026-10-08** (`.github/workflows/phone-ios.yml`, GitHub macos-15 runner, iOS 18.7
+  simulator, WKWebView "AppleWebKit/605.1.15", the same app): PASS — fresh, relaunched, and after
+  reinstalling over itself, each launch found the earlier runs, the sequence continued
+  (0→204→406→608), the two devices ended equal; 200 autosaves 0.6–1.3 s.
 
 ## Cloud APIs (the phone's cloud-folder stores)
 
