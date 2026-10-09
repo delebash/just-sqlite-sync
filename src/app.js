@@ -102,9 +102,20 @@ export function reachableUrls(port, prefix = "/v1/sync") {
  *           libraryMismatch?(fromName: string|null): Error }} [opts.errors] how errors reach the client
  * @param {{ warning(msg: string): void }} [opts.log]
  * @param {string} [opts.prefix]
+ * @param {object} [opts.platform] where the app runs, when not on a computer's Node (the phone's in-app
+ *   server, a worker): `deviceId(dataDir)` → this device's id (default `deviceIdentity`; undefined lets
+ *   the engine keep its own in the database), `deviceName()` → the name before the user sets one
+ *   (default the computer's), `folder(path)` → the store a cloud-folder setting names (default
+ *   `nodeFolder`)
  */
 export function createAppSync(opts) {
   const { app, appName, schemaVersion, tables, database, settings, auth, units, yjs, prefix = "/v1/sync" } = opts;
+  const platform = {
+    deviceId: (dataDir) => deviceIdentity(dataDir),
+    deviceName: () => os.hostname(),
+    folder: (where) => nodeFolder(where),
+    ...(opts.platform ?? {}),
+  };
   const errors = { ...DEFAULT_ERRORS, ...(opts.errors ?? {}) };
   const log = opts.log ?? { warning: (m) => console.warn(m) };
 
@@ -160,8 +171,8 @@ export function createAppSync(opts) {
       app,
       schemaVersion,
       tables: tables(),
-      deviceId: deviceIdentity(dataDir),
-      deviceName: cfg.deviceName || os.hostname(),
+      deviceId: platform.deviceId(dataDir),
+      deviceName: cfg.deviceName || platform.deviceName(),
       ...(yjs ? { yjs } : {}),
     });
     current = { sync: tracked(sync), dataDir };
@@ -208,7 +219,7 @@ export function createAppSync(opts) {
     if (!cfg.folder) return null;
     const started = new Date().toISOString();
     try {
-      const r = await folderSync(need(), nodeFolder(cfg.folder), { key: libraryKey(), name: "folder" }).sync();
+      const r = await folderSync(need(), platform.folder(cfg.folder), { key: libraryKey(), name: "folder" }).sync();
       lastRun.folder = { at: started, ok: true, pulled: r.pulled.applied, pushed: r.pushed.written, problems: r.pulled.problems.length };
     } catch (e) {
       lastRun.folder = { at: started, ok: false, error: String(e?.message ?? e), code: e?.code ?? null };
@@ -332,7 +343,7 @@ export function createAppSync(opts) {
     fastify.post(`${prefix}/folder/libraries`, async (req) => {
       const folder = req.body?.folder || readSettings().folder;
       if (!folder) throw errors.badRequest("no folder given");
-      return { libraries: await folderSync(need(), nodeFolder(String(folder))).libraries() };
+      return { libraries: await folderSync(need(), platform.folder(String(folder))).libraries() };
     });
 
     fastify.post(`${prefix}/folder/run`, async () => {

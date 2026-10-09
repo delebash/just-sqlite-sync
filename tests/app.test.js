@@ -2,7 +2,7 @@
 // The app layer (src/app.js): two app servers — each a database, its `sync` settings and tokens
 // in a settings table, the routes on Fastify — exchanging a file by hand, refusing another
 // library until joined, pairing with a device that's off, and the settings and status routes.
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import Database from "better-sqlite3";
@@ -92,6 +92,59 @@ describe("the app layer", () => {
     expect(phone.appSync.readSettings().key).toBe(r.code.key);
     const bad = await phone.server.inject({ method: "POST", url: "/v1/sync/pair/join", payload: { code: "{}" } });
     expect(bad.statusCode).toBe(400);
+  });
+
+  it("a platform without Node's disk (the phone): the engine's own device id, the app's name, its folder store", async () => {
+    const db = new Database(":memory:");
+    db.pragma("foreign_keys = ON");
+    db.exec(SCHEMA);
+    const files = new Map(); // a folder in memory, as a cloud store would be
+    const store = {
+      async list(dir) {
+        const prefix = dir ? `${dir}/` : "";
+        return [...new Set([...files.keys()].filter((k) => k.startsWith(prefix)).map((k) => k.slice(prefix.length).split("/")[0]))];
+      },
+      async read(p) {
+        if (!files.has(p)) throw Object.assign(new Error("missing"), { code: "ENOENT" });
+        return files.get(p);
+      },
+      async write(p, bytes) {
+        files.set(p, bytes);
+      },
+      async remove(p) {
+        files.delete(p);
+      },
+    };
+    let cfg = null;
+    const make = () =>
+      createAppSync({
+        app: "testapp",
+        appName: "Test App",
+        schemaVersion: 1,
+        tables: () => TABLES,
+        database: () => betterSqlite3Adapter(db),
+        settings: { read: () => cfg, write: (c) => (cfg = c) },
+        auth: { tokens: () => [], add() {} },
+        units: { scope: () => () => true, name: () => "x", extension: "tsync" },
+        platform: { deviceId: () => undefined, deviceName: () => "Android phone", folder: () => store },
+        log: { warning() {} },
+      });
+    const dir = mkdtempSync(path.join(tmpdir(), "appsync-phone-"));
+    cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
+    const first = make();
+    const s = first.open(dir);
+    expect(s.deviceName).toBe("Android phone");
+    expect(existsSync(path.join(dir, "sync-device.json"))).toBe(false); // no machine file: the engine keeps the id
+    const device = s.device;
+    first.stop();
+    const again = make();
+    expect(again.open(dir).device).toBe(device); // the same device after a restart
+    cfg = { ...cfg, folder: "the cloud" };
+    db.exec("INSERT INTO projects VALUES ('p1', 'The Lamp', NULL)");
+    const r = await again.runFolder();
+    again.stop();
+    expect(r).toMatchObject({ ok: true });
+    expect([...files.keys()].some((k) => k.startsWith(`${s.library}/${device}/`))).toBe(true);
   });
 
   it("settings: the device name reaches the engine; listening needs a token", async () => {

@@ -166,6 +166,11 @@ library, its key, a new token and this server's addresses — shown as a QR code
 (adopts the code's library and key even when the other device can't be reached, so a shared
 folder still carries the changes). JustWrite and JustVoice use it.
 
+Where Node's disk isn't there — the phone's in-app server, a worker — `platform` says how:
+`{ deviceId: () => undefined, deviceName: () => "Android phone", folder: (setting) => store }` (the
+engine then keeps this device's id in the database; the cloud folder is a store such as
+`oneDriveAppFolder`).
+
 ## Rules for a synced table
 
 - **A primary key, and ids unique across devices.** Use random ids (UUIDs or similar), never
