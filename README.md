@@ -133,6 +133,39 @@ way.
 Errors are `SyncError` with a `code`: `library-mismatch`, `schema-too-new`, `clock-drift`,
 `bad-file`, `wrong-key`, `bad-config`, `peer`.
 
+### In an app's server — `@delebash/sqlite-sync/app` (Node, Fastify)
+
+Everything an app server needs around the engine, so each app writes only what is its own:
+
+```js
+import { createAppSync } from "@delebash/sqlite-sync/app";
+
+const appSync = createAppSync({
+  app: "myapp", appName: "My App", schemaVersion: 1,
+  tables: () => ({ projects: {}, chapters: {} }),          // what syncs (openSync `tables`)
+  database: () => betterSqlite3Adapter(db),
+  settings: { read, write },        // where the app keeps the `sync` section (an object)
+  auth: { tokens, add },            // the app's bearer tokens — pairing adds one per device
+  units: { scope, name, extension: "mysync", noun: "projects" }, // what a by-hand file holds
+  errors,                           // optional: how a 400 / 409 / 503 reaches the app's client
+});
+appSync.open(dataDir);              // after the database is ready; reset(dataDir) after a wipe
+app.register(appSync.routes);       // /v1/sync/…
+app.addHook("onResponse", () => appSync.flush());
+const host = appSync.networkHost() ?? "127.0.0.1"; // the network only when paired devices may connect
+```
+
+It keeps this device's identity (`sync-device.json` in the data folder, tied to the machine), the
+`sync` settings (device name, the cloud folder, how often to sync, listening on the network, the
+library key, the paired devices, the last export), a sync shortly after start and then every few
+minutes with the folder and the paired devices, and the routes a sync screen calls:
+`hello`/`pull`/`push` (the engine's), `rev` (moves when another device's changes land — an open
+window polls it and reloads), `status`, `settings`, `folder/libraries`, `folder/run`, `run`,
+`export`, `import` (`?join=1` adopts the file's library), `peer/run`, `pair` (a code with the
+library, its key, a new token and this server's addresses — shown as a QR code) and `pair/join`
+(adopts the code's library and key even when the other device can't be reached, so a shared
+folder still carries the changes). JustWrite and JustVoice use it.
+
 ## Rules for a synced table
 
 - **A primary key, and ids unique across devices.** Use random ids (UUIDs or similar), never

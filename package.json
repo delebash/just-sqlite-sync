@@ -11,7 +11,8 @@
   "exports": {
     ".": "./src/index.js",
     "./node-folder": "./src/transports/node-folder.js",
-    "./fastify": "./src/transports/fastify.js"
+    "./fastify": "./src/transports/fastify.js",
+    "./app": "./src/app.js"
   },
   "scripts": {
     "test": "vitest run",
