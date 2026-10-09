@@ -9,7 +9,7 @@ JavaScript ES modules (`.js` only, `"type": "module"`), no native code, no TypeS
   (read the subject's section before researching; new facts land there in the same change).
 - The engine must stay usable on both adapters (better-sqlite3 and the SQLite WASM OO1 API): the
   adapter interface is in `src/adapters/better-sqlite3.js`. No Node-only import in `src/` except
-  `src/transports/node-folder.js` and `src/transports/fastify.js` (their own export paths).
+  `src/transports/node-folder.js` and `src/transports/hono.js` (their own export paths).
 - Every change to merging, recording or vectors must keep `tests/convergence.test.js` and
   `tests/wasm.test.js` green; when touching them, also run thousands of seeds once
   (`tests/sim.js` → `runOnce(seed, steps)`).

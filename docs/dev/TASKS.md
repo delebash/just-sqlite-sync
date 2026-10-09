@@ -11,9 +11,10 @@ STATE:  DECIDED 2026-10-09, family-wide — the decision with the user's words i
         "The family's servers move to Hono — one server that runs in Node and in a worker".
 WHY:    the apps' servers move to Hono; `/app`'s routes are registered on them.
 NOT:    the kit's item.
-BUILT:  nothing yet — the plan: `../just-llm-runner/docs/plans/2026-10-09-hono-standard.md`.
-OPEN:   this repo's slice (plan §7, slice 2): `/app`'s 2 route files and the 2 tests that import
-        Fastify (`tests/app.test.js`, `tests/http.test.js`) — after the kit's slice.
+BUILT:  2026-10-09 — `src/transports/hono.js` (`registerSyncRoutes(app, …)` on the app's own Hono),
+        `appSync.routes(app)`, `createAppSync({ readJson })`, the `./hono` export (47/47). The plan:
+        `../just-llm-runner/docs/plans/2026-10-09-hono-standard.md` §9.
+OPEN:   nothing.
 GO:     given 2026-10-09 (the kit's item).
 
 ## The phone side [2026-10-08]

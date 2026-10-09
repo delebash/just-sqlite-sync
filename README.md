@@ -75,11 +75,12 @@ const bytes = await encodeFile(sync.changesSince({}, { scope: (table, pk) => pic
 sync.apply(await decodeFile(bytes, { key }));
 ```
 
-The server side of HTTP sync is three routes; on Fastify:
+The server side of HTTP sync is three routes, added to your Hono app (this package creates no
+Hono of its own — your app keeps one):
 
 ```js
-import { registerSyncRoutes } from "@delebash/sqlite-sync/fastify";
-registerSyncRoutes(app, () => sync, { prefix: "/v1/sync" }); // your auth hook protects the prefix
+import { registerSyncRoutes } from "@delebash/sqlite-sync/hono";
+registerSyncRoutes(app, () => sync, { prefix: "/v1/sync" }); // your auth middleware protects the prefix
 ```
 
 In a webview, open the database with the WASM build (usually in a worker) and use
@@ -133,7 +134,7 @@ way.
 Errors are `SyncError` with a `code`: `library-mismatch`, `schema-too-new`, `clock-drift`,
 `bad-file`, `wrong-key`, `bad-config`, `peer`.
 
-### In an app's server — `@delebash/sqlite-sync/app` (Node, Fastify)
+### In an app's server — `@delebash/sqlite-sync/app` (Node, Hono)
 
 Everything an app server needs around the engine, so each app writes only what is its own:
 
@@ -148,10 +149,11 @@ const appSync = createAppSync({
   auth: { tokens, add },            // the app's bearer tokens — pairing adds one per device
   units: { scope, name, extension: "mysync", noun: "projects" }, // what a by-hand file holds
   errors,                           // optional: how a 400 / 409 / 503 reaches the app's client
+  readJson,                         // optional: the app's JSON body reader (default plain JSON)
 });
 appSync.open(dataDir);              // after the database is ready; reset(dataDir) after a wipe
-app.register(appSync.routes);       // /v1/sync/…
-app.addHook("onResponse", () => appSync.flush());
+app.use("*", async (c, next) => { await next(); appSync.flush(); }); // before the routes
+appSync.routes(app);                // /v1/sync/… on the app's own Hono
 const host = appSync.networkHost() ?? "127.0.0.1"; // the network only when paired devices may connect
 ```
 

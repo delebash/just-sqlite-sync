@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Sync for an app's Fastify server — everything an app needs around the engine, in one place:
+// Sync for an app's Hono server — everything an app needs around the engine, in one place:
 // this device's identity, the app's `sync` settings, a sync shortly after start and then every
 // few minutes (the cloud folder and the paired devices), listening on the network for paired
 // devices, pairing codes, the by-hand file, and the routes a sync screen calls. Node only.
@@ -12,8 +12,12 @@
 //   const appSync = createAppSync({ app: "justvoice", appName: "JustVoice", schemaVersion: 1,
 //     tables: () => ({ projects: {}, … }), database: () => betterSqlite3Adapter(h.raw),
 //     settings: { read, write }, auth: { tokens, add }, units: { scope, name, extension },
-//     errors, log });
-//   appSync.open(dataDir); app.register(appSync.routes); appSync.flush(); appSync.networkHost();
+//     errors, log, readJson });
+//   appSync.open(dataDir); appSync.routes(app); appSync.flush(); appSync.networkHost();
+//
+// `appSync.routes(app)` adds the routes to the app's own Hono instance (this package creates no
+// Hono of its own); `readJson(c)` is the app's JSON body reader (its rules for a body with no
+// content type or bad JSON), plain JSON when the app gives none.
 //
 // The routes (prefix /v1/sync): GET hello · POST pull · POST push (the engine's, another device's
 // syncWithPeer calls them) · GET rev (an open window polls it; it moves when another device's
@@ -27,7 +31,7 @@ import { openSync } from "./engine.js";
 import { SyncError } from "./errors.js";
 import { decodeFile, encodeFile, generateLibraryKey, readFileHeader } from "./file.js";
 import { folderSync } from "./transports/folder.js";
-import { registerSyncRoutes } from "./transports/fastify.js";
+import { plainJson, registerSyncRoutes, tooLarge } from "./transports/hono.js";
 import { syncWithPeer } from "./transports/http.js";
 import { nodeFolder } from "./transports/node-folder.js";
 
@@ -101,6 +105,7 @@ export function reachableUrls(port, prefix = "/v1/sync") {
  * @param {{ badRequest(detail: string): Error, notReady(): Error, refused(e: SyncError): Error,
  *           libraryMismatch?(fromName: string|null): Error }} [opts.errors] how errors reach the client
  * @param {{ warning(msg: string): void }} [opts.log]
+ * @param {(c: object) => Promise<any>} [opts.readJson] the app's JSON body reader (default plain JSON)
  * @param {string} [opts.prefix]
  * @param {object} [opts.platform] where the app runs, when not on a computer's Node (the phone's in-app
  *   server, a worker): `deviceId(dataDir)` → this device's id (default `deviceIdentity`; undefined lets
@@ -118,6 +123,7 @@ export function createAppSync(opts) {
   };
   const errors = { ...DEFAULT_ERRORS, ...(opts.errors ?? {}) };
   const log = opts.log ?? { warning: (m) => console.warn(m) };
+  const readJson = opts.readJson ?? plainJson;
 
   let current = null; // { sync, dataDir }
   let rev = 0; // moves whenever another device's changes land here — the window reloads
@@ -292,17 +298,21 @@ export function createAppSync(opts) {
 
   // ── the routes ───────────────────────────────────────────────────────────────────────
 
-  async function routes(fastify) {
-    registerSyncRoutes(fastify, need, { prefix });
+  /** This server's own address — Node's socket under @hono/node-server; none inside the app (the
+   * phone's in-app server answers without one). */
+  const localSocket = (c) => c.env?.incoming?.socket ?? null;
 
-    fastify.addContentTypeParser("application/octet-stream", { parseAs: "buffer", bodyLimit: 1024 * 1024 * 1024 }, (_req, body, done) => done(null, body));
+  /** Add the routes to the app's Hono instance. */
+  function routes(server) {
+    registerSyncRoutes(server, need, { prefix, readJson });
 
-    fastify.get(`${prefix}/rev`, async () => ({ rev, pollSeconds: Number(readSettings().pollSeconds) || 5 }));
+    server.get(`${prefix}/rev`, (c) => c.json({ rev, pollSeconds: Number(readSettings().pollSeconds) || 5 }));
 
-    fastify.get(`${prefix}/status`, async (req) => {
+    server.get(`${prefix}/status`, (c) => {
       const s = need();
       const cfg = readSettings();
-      return {
+      const socket = localSocket(c);
+      return c.json({
         device: s.device,
         deviceName: s.deviceName,
         library: s.library,
@@ -319,12 +329,12 @@ export function createAppSync(opts) {
           peers: (cfg.peers ?? []).map((p) => ({ url: p.url, name: p.name ?? null })),
         },
         lastRun,
-        listening: { host: req.socket?.localAddress ?? null, port: req.socket?.localPort ?? null },
-      };
+        listening: { host: socket?.localAddress ?? null, port: socket?.localPort ?? null },
+      });
     });
 
-    fastify.put(`${prefix}/settings`, async (req) => {
-      const body = req.body ?? {};
+    server.put(`${prefix}/settings`, async (c) => {
+      const body = (await readJson(c)) ?? {};
       const cfg = readSettings();
       const next = { ...cfg };
       if ("deviceName" in body) next.deviceName = body.deviceName ? String(body.deviceName) : null;
@@ -336,42 +346,49 @@ export function createAppSync(opts) {
       writeSettings(next);
       if (next.deviceName && next.deviceName !== cfg.deviceName) need().setDeviceName(next.deviceName);
       schedule();
-      return { ok: true, restartRequired: next.listenOnNetwork !== cfg.listenOnNetwork };
+      return c.json({ ok: true, restartRequired: next.listenOnNetwork !== cfg.listenOnNetwork });
     });
 
     /** The libraries already in a folder (to join one instead of starting a second). */
-    fastify.post(`${prefix}/folder/libraries`, async (req) => {
-      const folder = req.body?.folder || readSettings().folder;
+    server.post(`${prefix}/folder/libraries`, async (c) => {
+      const body = await readJson(c);
+      const folder = body?.folder || readSettings().folder;
       if (!folder) throw errors.badRequest("no folder given");
-      return { libraries: await folderSync(need(), platform.folder(String(folder))).libraries() };
+      return c.json({ libraries: await folderSync(need(), platform.folder(String(folder))).libraries() });
     });
 
-    fastify.post(`${prefix}/folder/run`, async () => {
+    server.post(`${prefix}/folder/run`, async (c) => {
       const r = await runFolder();
       if (!r) throw errors.badRequest("no sync folder is set");
-      return r;
+      return c.json(r);
     });
 
-    fastify.post(`${prefix}/run`, async () => ({ folder: await runFolder(), peers: await runPeers() }));
+    server.post(`${prefix}/run`, async (c) => c.json({ folder: await runFolder(), peers: await runPeers() }));
 
     /** A file of some units (books, projects…), carried by hand to another device (import merges). */
-    fastify.post(`${prefix}/export`, async (req, reply) => {
-      const ids = Array.isArray(req.body?.projectIds) ? req.body.projectIds.map(String) : [];
+    server.post(`${prefix}/export`, async (c) => {
+      const body = await readJson(c);
+      const ids = Array.isArray(body?.projectIds) ? body.projectIds.map(String) : [];
       if (!ids.length) throw errors.badRequest("pick at least one");
       const batch = need().changesSince({}, { scope: units.scope(ids) });
-      const bytes = await encodeFile(batch, req.body?.encrypt ? { key: libraryKey() } : {});
+      const bytes = await encodeFile(batch, body?.encrypt ? { key: libraryKey() } : {});
       writeSettings({ ...readSettings(), lastExport: new Date().toISOString() });
       const base = String(units.name(ids) || appName).replace(/[\\/:*?"<>|]+/g, " ").trim().slice(0, 60) || appName;
       const d = new Date(); // today on this computer's calendar, not UTC's
       const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
       const name = `${base}${ids.length > 1 ? ` +${ids.length - 1}` : ""} ${day}.${units.extension}`;
-      reply.header("content-disposition", `attachment; filename="${encodeURIComponent(name)}"`);
-      return reply.type("application/octet-stream").send(Buffer.from(bytes));
+      return c.body(bytes, 200, {
+        "Content-Disposition": `attachment; filename="${encodeURIComponent(name)}"`,
+        "Content-Type": "application/octet-stream",
+      });
     });
 
     /** Import a carried file: merges. `?join=1` adopts the file's library (a device's first sync). */
-    fastify.post(`${prefix}/import`, async (req) => {
-      const bytes = req.body instanceof Uint8Array ? req.body : null;
+    server.post(`${prefix}/import`, async (c) => {
+      if (Number(c.req.header("content-length") ?? 0) > 1024 * 1024 * 1024) throw tooLarge();
+      const bytes = /^application\/octet-stream/i.test(c.req.header("content-type") || "")
+        ? new Uint8Array(await c.req.arrayBuffer())
+        : null;
       if (!bytes) throw errors.badRequest("send the file as application/octet-stream");
       let header;
       try {
@@ -380,7 +397,7 @@ export function createAppSync(opts) {
         failure(e);
       }
       const s = need();
-      const join = String(req.query?.join ?? "") === "1";
+      const join = String(c.req.query("join") ?? "") === "1";
       if (header.library !== s.library && !join) {
         throw errors.refused(
           new SyncError("library-mismatch", `This file is from another library${header.fromName ? ` (${header.fromName})` : ""}. Join it to merge its ${units.noun ?? "contents"} into this one.`, { fromName: header.fromName ?? null }),
@@ -390,22 +407,22 @@ export function createAppSync(opts) {
         const batch = await decodeFile(bytes, header.enc ? { key: readSettings().key ?? undefined } : {});
         const r = s.apply(batch, { join });
         s.recordPeer(header.from, { name: header.fromName ?? null, kind: "file" });
-        return { applied: r.applied, rows: r.rows, problems: r.problems, from: header.fromName ?? header.from };
+        return c.json({ applied: r.applied, rows: r.rows, problems: r.problems, from: header.fromName ?? header.from });
       } catch (e) {
         failure(e);
       }
     });
 
     /** Sync now with a device or server over HTTP (and remember it). */
-    fastify.post(`${prefix}/peer/run`, async (req) => {
-      const { url, token, join } = req.body ?? {};
+    server.post(`${prefix}/peer/run`, async (c) => {
+      const { url, token, join } = (await readJson(c)) ?? {};
       if (!url) throw errors.badRequest("give the other device's address");
       try {
         const r = await syncWithPeer(need(), { url: String(url), token: token ? String(token) : undefined, join: !!join });
         const cfg = readSettings();
         const peers = (cfg.peers ?? []).filter((p) => p.url !== url);
         writeSettings({ ...cfg, peers: [...peers, { url: String(url), token: token ? String(token) : null, name: r.peer.name ?? null }] });
-        return { peer: r.peer, pulled: r.pulled.applied, sent: r.pushed.sent };
+        return c.json({ peer: r.peer, pulled: r.pulled.applied, sent: r.pushed.sent });
       } catch (e) {
         failure(e);
       }
@@ -416,18 +433,18 @@ export function createAppSync(opts) {
      * device, and this server's addresses. Turning pairing on also turns on listening on the
      * network (applies on the next start).
      */
-    fastify.post(`${prefix}/pair`, async (req) => {
+    server.post(`${prefix}/pair`, (c) => {
       const s = need();
       const token = randomBytes(24).toString("base64url");
       auth.add(token);
       const cfg = readSettings();
       const wasListening = cfg.listenOnNetwork;
       writeSettings({ ...cfg, listenOnNetwork: true });
-      const port = req.socket?.localPort;
-      return {
+      const port = localSocket(c)?.localPort;
+      return c.json({
         code: { v: 1, app, library: s.library, key: libraryKey(), token, name: s.deviceName, urls: port ? reachableUrls(port, prefix) : [] },
         restartRequired: !wasListening,
-      };
+      });
     });
 
     /**
@@ -436,10 +453,11 @@ export function createAppSync(opts) {
      * even when the other device can't be reached; then it syncs with the first address that
      * answers and remembers it.
      */
-    fastify.post(`${prefix}/pair/join`, async (req) => {
+    server.post(`${prefix}/pair/join`, async (c) => {
+      const body = await readJson(c);
       let code;
       try {
-        code = typeof req.body?.code === "string" ? JSON.parse(req.body.code) : req.body?.code;
+        code = typeof body?.code === "string" ? JSON.parse(body.code) : body?.code;
       } catch {
         code = null;
       }
@@ -453,14 +471,14 @@ export function createAppSync(opts) {
           const cfg = readSettings();
           const peers = (cfg.peers ?? []).filter((p) => p.url !== url);
           writeSettings({ ...cfg, peers: [...peers, { url, token: code.token, name: r.peer.name ?? code.name ?? null }] });
-          return { joined: true, url, peer: r.peer, pulled: r.pulled.applied, sent: r.pushed.sent };
+          return c.json({ joined: true, url, peer: r.peer, pulled: r.pulled.applied, sent: r.pushed.sent });
         } catch (e) {
           log.warning(`pairing: ${url} didn't answer: ${e?.message ?? e}`);
         }
       }
       // Joined, but no address answered (the other device is off or on another network): the
       // folder, or a later "Sync now", carries the changes.
-      return { joined: true, url: null, peer: { name: code.name ?? null }, pulled: 0, sent: 0 };
+      return c.json({ joined: true, url: null, peer: { name: code.name ?? null }, pulled: 0, sent: 0 });
     });
   }
 

@@ -1,25 +1,32 @@
 // SPDX-License-Identifier: MIT
-import Fastify from "fastify";
+import { serve as listen } from "@hono/node-server";
+import { Hono } from "hono";
 import { afterEach, describe, expect, it } from "vitest";
 import { LIBRARY_MISMATCH, syncWithPeer } from "../src/index.js";
-import { registerSyncRoutes } from "../src/transports/fastify.js";
+import { registerSyncRoutes } from "../src/transports/hono.js";
 import { dump, makeDevice } from "./helpers.js";
 
 const servers = [];
 async function serve(dev, { token } = {}) {
-  const app = Fastify();
+  const app = new Hono();
   if (token) {
-    app.addHook("onRequest", async (req, reply) => {
-      if (req.headers.authorization !== `Bearer ${token}`) reply.code(401).send({ message: "sign in" });
+    app.use("*", async (c, next) => {
+      if (c.req.header("authorization") !== `Bearer ${token}`) return c.json({ message: "sign in" }, 401);
+      await next();
     });
   }
   registerSyncRoutes(app, dev.sync);
-  await app.listen({ port: 0, host: "127.0.0.1" });
-  servers.push(app);
-  return `http://127.0.0.1:${app.server.address().port}/v1/sync`;
+  const server = await new Promise((resolve) => {
+    const s = listen({ fetch: app.fetch, port: 0, hostname: "127.0.0.1" }, () => resolve(s));
+  });
+  servers.push(server);
+  return `http://127.0.0.1:${server.address().port}/v1/sync`;
 }
 afterEach(async () => {
-  for (const s of servers.splice(0)) await s.close();
+  for (const s of servers.splice(0)) {
+    s.closeAllConnections();
+    await new Promise((resolve) => s.close(() => resolve()));
+  }
 });
 
 describe("HTTP sync", () => {

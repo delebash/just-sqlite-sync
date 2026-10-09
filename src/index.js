@@ -2,7 +2,7 @@
 // @delebash/sqlite-sync — sync for SQLite databases owned by one person and used on many
 // devices. README.md is the guide; docs/design.md the reasoning; docs/file-format.md the file.
 // Node-only pieces have their own entry points: "@delebash/sqlite-sync/node-folder" (a folder on
-// disk) and "@delebash/sqlite-sync/fastify" (the routes on a Fastify server).
+// disk) and "@delebash/sqlite-sync/hono" (the routes on an app's Hono server).
 
 export { openSync, FORMAT_VERSION } from "./engine.js";
 export { createClock, formatStamp, parseStamp } from "./clock.js";
