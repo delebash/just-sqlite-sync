@@ -151,11 +151,22 @@ export function folderSync(sync, store, { key, snapshotEvery = 100, name = "fold
      * files applied, or null when this folder holds nothing of this device.
      */
     async restore() {
+      // This device may have files in more than one library (it started one, then joined
+      // another): the one it wrote to last — its device.json's `updated` — is the library it's in.
       let lib = null;
+      let newest = "";
       for (const l of await store.list("")) {
-        if ((await store.list(l)).includes(sync.device)) {
+        if (!(await store.list(l)).includes(sync.device)) continue;
+        let updated = "";
+        try {
+          const bytes = await store.read(`${l}/${sync.device}/device.json`);
+          updated = bytes ? String(JSON.parse(utf8.decode(bytes)).updated ?? "") : "";
+        } catch {
+          // no readable device.json: the oldest possible
+        }
+        if (lib === null || updated > newest) {
           lib = l;
-          break;
+          newest = updated;
         }
       }
       if (!lib) return null;

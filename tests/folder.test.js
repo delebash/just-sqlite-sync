@@ -94,6 +94,23 @@ describe("folder sync", () => {
     expect(dump(rebuilt.raw)).toEqual(dump(phone.raw));
   });
 
+  it("a device rebuilds into the library it wrote to last (it started one, then joined another)", async () => {
+    const guard = tempDir();
+    const laptop = makeDevice("laptop");
+    seed(laptop);
+    const phone = makeDevice("phone");
+    await folderSync(phone.sync, nodeFolder(guard), { state: "guard" }).push(); // its own first library
+    const first = phone.sync.library;
+    await new Promise((r) => setTimeout(r, 5)); // a later `updated`
+    phone.sync.apply(laptop.sync.changesSince({}), { join: true }); // pairs: joins the laptop's library, takes its books
+    await folderSync(phone.sync, nodeFolder(guard), { state: "guard" }).push();
+    expect(readdirSync(guard).sort()).toEqual([first, laptop.sync.library].sort());
+    const rebuilt = makeDevice("phone (wiped)", { deviceId: phone.sync.device });
+    await folderSync(rebuilt.sync, nodeFolder(guard), { state: "guard" }).restore();
+    expect(rebuilt.sync.library).toBe(laptop.sync.library);
+    expect(dump(rebuilt.raw)).toEqual(dump(laptop.raw));
+  });
+
   it("lists the libraries in a folder, for joining one", async () => {
     const root = tempDir();
     const a = makeDevice("Dan's laptop");
