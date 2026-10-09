@@ -45,8 +45,10 @@ function parseNames(names) {
  * @param {{ key?: string, snapshotEvery?: number, name?: string }} [opts]
  *   key: the library key — every file is encrypted with it (the folder is on someone else's disk)
  *   name: what to call this folder in the devices list ("Dropbox")
+ *   state: the prefix of this folder's progress in the engine's state (`folder.fileNo`, …) — a second
+ *   folder on the same device (the phone's storage guard beside its cloud folder) takes its own
  */
-export function folderSync(sync, store, { key, snapshotEvery = 100, name = "folder" } = {}) {
+export function folderSync(sync, store, { key, snapshotEvery = 100, name = "folder", state = "folder" } = {}) {
   const dir = () => `${sync.library}/${sync.device}`;
 
   async function writeDeviceInfo() {
@@ -55,29 +57,29 @@ export function folderSync(sync, store, { key, snapshotEvery = 100, name = "fold
   }
 
   async function writeSnapshot() {
-    const n = sync.getState("folder.fileNo") ?? 0;
+    const n = sync.getState(`${state}.fileNo`) ?? 0;
     await store.write(`${dir()}/s-${pad(n)}.sqs`, await encodeFile(sync.changesSince({}), { key }));
     // keep this snapshot and the one before it, and the change files after that one
     const { changes, snapshots } = parseNames(await store.list(dir()));
     const keepFrom = snapshots.length >= 2 ? snapshots[snapshots.length - 2].n : 0;
     for (const s of snapshots.slice(0, -2)) await store.remove(`${dir()}/${s.name}`);
     for (const c of changes) if (c.n <= keepFrom) await store.remove(`${dir()}/${c.name}`);
-    sync.setState("folder.sinceSnapshot", 0);
+    sync.setState(`${state}.sinceSnapshot`, 0);
   }
 
   /** Write what this device holds that its earlier files didn't. */
   async function push() {
-    const batch = sync.changesSince(sync.getState("folder.pushVector") ?? {});
+    const batch = sync.changesSince(sync.getState(`${state}.pushVector`) ?? {});
     let written = 0;
     if (batch.changes.length) {
-      const n = (sync.getState("folder.fileNo") ?? 0) + 1;
+      const n = (sync.getState(`${state}.fileNo`) ?? 0) + 1;
       await store.write(`${dir()}/c-${pad(n)}.sqs`, await encodeFile(batch, { key }));
-      sync.setState("folder.fileNo", n);
-      sync.setState("folder.sinceSnapshot", (sync.getState("folder.sinceSnapshot") ?? 0) + 1);
+      sync.setState(`${state}.fileNo`, n);
+      sync.setState(`${state}.sinceSnapshot`, (sync.getState(`${state}.sinceSnapshot`) ?? 0) + 1);
       written = batch.changes.length;
     }
-    sync.setState("folder.pushVector", batch.vector);
-    if ((sync.getState("folder.sinceSnapshot") ?? 0) >= snapshotEvery) await writeSnapshot();
+    sync.setState(`${state}.pushVector`, batch.vector);
+    if ((sync.getState(`${state}.sinceSnapshot`) ?? 0) >= snapshotEvery) await writeSnapshot();
     await writeDeviceInfo();
     return { written };
   }
@@ -95,21 +97,21 @@ export function folderSync(sync, store, { key, snapshotEvery = 100, name = "fold
       if (other === sync.device) continue;
       const odir = `${sync.library}/${other}`;
       const { changes, snapshots } = parseNames(await store.list(odir));
-      let read = sync.getState(`folder.read.${other}`) ?? 0;
+      let read = sync.getState(`${state}.read.${other}`) ?? 0;
       const next = changes.find((c) => c.n > read);
       const newest = snapshots[snapshots.length - 1];
       if (newest && newest.n > read && (!next || next.n > read + 1)) {
         // the files after where this device stopped were compacted away: start from the snapshot
         collect(out, sync.apply(await readFile(`${odir}/${newest.name}`)));
         read = newest.n;
-        sync.setState(`folder.read.${other}`, read);
+        sync.setState(`${state}.read.${other}`, read);
       }
       for (const c of changes) {
         if (c.n <= read) continue;
         if (c.n !== read + 1) break; // a gap: wait for that device's next snapshot
         collect(out, sync.apply(await readFile(`${odir}/${c.name}`)));
         read = c.n;
-        sync.setState(`folder.read.${other}`, read);
+        sync.setState(`${state}.read.${other}`, read);
       }
       let deviceName = null;
       const info = await store.read(`${odir}/device.json`);
@@ -173,8 +175,8 @@ export function folderSync(sync, store, { key, snapshotEvery = 100, name = "fold
         read = c.n;
         files++;
       }
-      sync.setState("folder.fileNo", Math.max(read, sync.getState("folder.fileNo") ?? 0));
-      sync.setState("folder.pushVector", sync.vector());
+      sync.setState(`${state}.fileNo`, Math.max(read, sync.getState(`${state}.fileNo`) ?? 0));
+      sync.setState(`${state}.pushVector`, sync.vector());
       return files;
     },
     /** The libraries in this folder and their devices — for "join the library in this folder". */

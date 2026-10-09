@@ -78,6 +78,22 @@ describe("folder sync", () => {
     expect(dump(b.db)).toEqual(dump(a.db));
   });
 
+  it("two folders on one device keep their own progress (the phone's storage guard beside its cloud folder)", async () => {
+    const cloud = tempDir();
+    const guard = tempDir();
+    const phone = makeDevice("phone");
+    seed(phone);
+    await folderSync(phone.sync, nodeFolder(cloud)).push();
+    // the guard's first push still writes everything: its progress isn't the cloud folder's
+    await folderSync(phone.sync, nodeFolder(guard), { state: "guard" }).push();
+    const files = (root) => readdirSync(path.join(root, phone.sync.library, phone.sync.device)).filter((n) => n !== "device.json");
+    expect(files(guard)).toEqual(files(cloud));
+    // a phone whose database was lost rebuilds from the guard alone
+    const rebuilt = makeDevice("phone (wiped)", { deviceId: phone.sync.device });
+    expect(await folderSync(rebuilt.sync, nodeFolder(guard), { state: "guard" }).restore()).not.toBeNull();
+    expect(dump(rebuilt.raw)).toEqual(dump(phone.raw));
+  });
+
   it("lists the libraries in a folder, for joining one", async () => {
     const root = tempDir();
     const a = makeDevice("Dan's laptop");

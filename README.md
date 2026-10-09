@@ -126,7 +126,7 @@ way.
 | `sync.peers()` | The devices and places this one has synced with, newest first. |
 | `syncWithPeer(sync, { url, token, join })` | Pull then push with another device's routes. |
 | `createSyncHandlers(sync)` | The three routes' bodies for any web framework (`hello`, `pull`, `push`). |
-| `folderSync(sync, store, { key, snapshotEvery })` | `.sync()`, `.pull()`, `.push()`, `.restore()` (rebuild this device from its own files), `.libraries()` (for "join the library in this folder"), `.removeDevice(id)`. `store` is `{ list, read, write, remove }`: `nodeFolder(dir)` on disk, `oneDriveAppFolder({ getToken })`, `dropboxAppFolder({ getToken })`. |
+| `folderSync(sync, store, { key, snapshotEvery, name, state })` | `.sync()`, `.pull()`, `.push()`, `.restore()` (rebuild this device from its own files), `.libraries()` (for "join the library in this folder"), `.removeDevice(id)`. `state` (default `"folder"`) keeps a second folder's progress apart (the phone's storage guard beside its cloud folder). `store` is `{ list, read, write, remove }`: `nodeFolder(dir)` on disk, `oneDriveAppFolder({ getToken })`, `dropboxAppFolder({ getToken })`. |
 | `encodeFile(batch, { key })` / `decodeFile(bytes, { key })` / `readFileHeader(bytes)` | The change file; with `key`, AES-256-GCM. `generateLibraryKey()` makes a key. |
 | `plainTextAdapter()` | Rich-text merging for a plain-text column. Other kinds (HTML from an editor) bring their own adapter: `{ apply(ydoc, value), render(ydoc) }`. |
 
