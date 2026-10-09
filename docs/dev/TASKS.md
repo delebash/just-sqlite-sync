@@ -6,6 +6,16 @@
 > ("Sync — offline first, by file, folder and server"); the program is the kit's
 > `docs/plans/2026-10-08-sync-and-quasar-program.md`.
 
+## The app layer's routes move to Hono [2026-10-09]
+STATE:  DECIDED 2026-10-09, family-wide — the decision with the user's words is the kit's TASKS,
+        "The family's servers move to Hono — one server that runs in Node and in a worker".
+WHY:    the apps' servers move to Hono; `/app`'s routes are registered on them.
+NOT:    the kit's item.
+BUILT:  nothing yet — the plan: `../just-llm-runner/docs/plans/2026-10-09-hono-standard.md`.
+OPEN:   this repo's slice (plan §7, slice 2): `/app`'s 2 route files and the 2 tests that import
+        Fastify (`tests/app.test.js`, `tests/http.test.js`) — after the kit's slice.
+GO:     given 2026-10-09 (the kit's item).
+
 ## The phone side [2026-10-08]
 STATE:  DECIDED 2026-10-08 (JustWrite TASKS item 7): the phone also saves its outgoing changes to
         the app's own native folder and rebuilds from them if needed; the cloud folder on the phone
