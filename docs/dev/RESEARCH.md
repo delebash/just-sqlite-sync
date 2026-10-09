@@ -72,6 +72,20 @@ This file holds what this repo's code depends on.
 - A Y.Doc's `clientID` can be set after loading a state and before editing; edits then continue
   that client's clock.
 
+## Partial files (a scope)
+
+- A partial batch whose rows point at a parent the importing device lacks loses those rows there:
+  `apply` → `removeOrphans` deletes them (`CASCADE`) or nulls the reference (`SET NULL`) and
+  records it as that device's own change, newer than the original — it then wins everywhere.
+  JustVoice's first scope (a project, its personas via the speakers, their lexicons) would have
+  dropped a lexicon whose `project_id` was another project. — *code, 2026-10-08* · `src/engine.js`
+  `removeOrphans`; JustVoice `server/tests/sync.test.js`.
+- A deletion keeps only `(tbl, pk, "-")` in `sync_clock` (`recordDelete` drops the other columns), so
+  a scope over single-id tables can't tell which unit a deleted row was in. — *code, 2026-10-08*.
+- JustVoice's real project (1 project, 4 chapters, 289 lines, 10 speakers, 10 personas) by hand:
+  the file 73 KB, export 146 ms, import 211 ms (3,180 fields, 314 rows), the same file again 0
+  rows; every synced table's count equal on both sides. — *measured, 2026-10-08*.
+
 ## Measured
 
 - Recording cost (2,000 saves of a 7.5 KB row, WAL): cr-sqlite 336 ms vs 132 ms plain; a full-log

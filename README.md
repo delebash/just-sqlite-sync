@@ -174,6 +174,13 @@ folder still carries the changes). JustWrite and JustVoice use it.
   without defaults (unlike cr-sqlite, which refuses both).
 - **Per-device columns** go in `exclude`. Tables that shouldn't sync (settings, caches, search
   indexes) simply aren't listed.
+- **A by-hand scope must hold every parent its rows point at.** `apply` deletes (or, for `SET
+  NULL`, empties) a row whose parent is missing — the cascade's rule — and records that as the
+  importing device's own change, which then travels back. So a scope keeps the parents of every row
+  it keeps (JustVoice's `projectScope` closes over the foreign keys). And a deleted row's id is
+  all the engine keeps of it: when the primary key doesn't name the unit (`[projectId, id]` does;
+  a bare `id` doesn't), note each deleted row's parent yourself if a file of a unit should carry
+  what was deleted from it (JustVoice's `jv_sync_deleted`, a before-delete trigger).
 - **Schema changes:** reopen with the new `schemaVersion` after migrating; the triggers rebuild
   themselves when a table's shape changes. Devices on an older schema refuse the newer one's
   batches until updated.

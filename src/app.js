@@ -351,7 +351,9 @@ export function createAppSync(opts) {
       const bytes = await encodeFile(batch, req.body?.encrypt ? { key: libraryKey() } : {});
       writeSettings({ ...readSettings(), lastExport: new Date().toISOString() });
       const base = String(units.name(ids) || appName).replace(/[\\/:*?"<>|]+/g, " ").trim().slice(0, 60) || appName;
-      const name = `${base}${ids.length > 1 ? ` +${ids.length - 1}` : ""} ${new Date().toISOString().slice(0, 10)}.${units.extension}`;
+      const d = new Date(); // today on this computer's calendar, not UTC's
+      const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      const name = `${base}${ids.length > 1 ? ` +${ids.length - 1}` : ""} ${day}.${units.extension}`;
       reply.header("content-disposition", `attachment; filename="${encodeURIComponent(name)}"`);
       return reply.type("application/octet-stream").send(Buffer.from(bytes));
     });
