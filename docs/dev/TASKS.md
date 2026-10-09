@@ -27,6 +27,11 @@ BUILT:  `oneDriveAppFolder`, `dropboxAppFolder` (tested against fakes of the two
 OPEN:   a real sign-in against OneDrive
         and Dropbox needs app registrations under the user's accounts (an Azure app id, a Dropbox
         app key) — the stores take a token, the app does the sign-in.
+        The phone waits (DECIDED 2026-10-09 — the user: "lets remove any phone from release
+        worflow for now"; shown that no release workflow builds a phone, only two phone test
+        workflows, and the rec "make just-sqlite-sync's manual-only like JustWrite's, so no phone
+        run starts by itself, and keep both files for when you come back to phones"; the user:
+        "your rec go"): `.github/workflows/phone-ios.yml` runs only by hand.
 GO:     given 2026-10-08 ("you have a go on it all your recs").
 
 ## Adoption by the apps [2026-10-08]

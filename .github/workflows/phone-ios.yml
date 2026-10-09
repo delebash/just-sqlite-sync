@@ -1,12 +1,11 @@
 # SPDX-License-Identifier: MIT
 # The phone test on the iOS simulator: the sync engine on the official SQLite WASM build over
 # OPFS inside WKWebView (Capacitor), launched fresh, relaunched, and after an app update.
+# Manual only while the phone waits (the user, 2026-10-09): "Run workflow" or `gh workflow run
+# phone-ios.yml`.
 name: Phone (iOS simulator)
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths: ["src/**", "tests/phone/**", ".github/workflows/phone-ios.yml"]
 jobs:
   ios:
     runs-on: macos-15
