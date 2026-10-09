@@ -29,6 +29,8 @@ export const FORMAT_VERSION = 1;
  * @param {string} [options.deviceName]
  * @param {() => number} [options.now]
  * @param {number} [options.maxDriftMs]
+ * @param {object} [options.yjs] the Yjs module for rich-text columns — pass the app's own when its
+ *   text adapters use another Yjs library (y-prosemirror, y-tiptap), so there's one copy of Yjs
  */
 export function openSync(db, options) {
   const { app, schemaVersion = 1, tables, now, maxDriftMs } = options || {};
@@ -95,7 +97,7 @@ export function openSync(db, options) {
       if (!adapter || typeof adapter.apply !== "function" || typeof adapter.render !== "function") {
         throw new SyncError(BAD_CONFIG, `text column ${name}.${col} needs an adapter with apply(doc, value) and render(doc)`);
       }
-      text[col] = textOps(adapter, deviceClientId);
+      text[col] = textOps(adapter, deviceClientId, options.yjs);
     }
     const where = pk.map((c) => `${quoteIdent(c)} = ?`).join(" AND ");
     info[name] = { name, pk, data, text, where, Q: quoteIdent(name), dataSet: new Set(data) };
