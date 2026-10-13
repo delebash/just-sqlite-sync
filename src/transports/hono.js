@@ -6,6 +6,7 @@
 // The routes are added to the app's own Hono instance (`app.get/post`), and this package creates
 // no Hono of its own — an app has one Hono (two copies would answer errors differently).
 
+import { bodyLimit as honoBodyLimit } from "hono/body-limit";
 import { SyncError } from "../errors.js";
 import { createSyncHandlers } from "./http.js";
 
@@ -27,10 +28,21 @@ export async function plainJson(c) {
  */
 export function registerSyncRoutes(app, getSync, { prefix = "/v1/sync", bodyLimit = 1024 * 1024 * 1024, onApplied, readJson = plainJson } = {}) {
   const h = createSyncHandlers(getSync, { onApplied });
+  // The body is read inside Hono's body-limit middleware (hono.dev/docs/middleware/builtin/body-limit),
+  // which refuses it by its Content-Length or as it streams in; over the limit, the 413 above.
+  const limit = honoBodyLimit({
+    maxSize: bodyLimit,
+    onError: () => {
+      throw tooLarge();
+    },
+  });
   const guard = (fn) => async (c) => {
-    if (Number(c.req.header("content-length") ?? 0) > bodyLimit) throw tooLarge();
+    let body;
+    await limit(c, async () => {
+      body = await readJson(c);
+    });
     try {
-      return c.json(await fn(await readJson(c)));
+      return c.json(await fn(body));
     } catch (err) {
       if (err instanceof SyncError) return c.json({ error: err.code, message: err.message }, 409);
       throw err;
