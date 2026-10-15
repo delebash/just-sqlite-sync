@@ -92,4 +92,17 @@ This file holds what this repo's code depends on.
   design 1,020 ms vs 106 ms; this engine's history-free triggers are cr-sqlite's shape (2026-10-08,
   the kit's round-2 record).
 - Convergence: 300 seeded runs in the suite, plus 3,000 runs of 40 steps and 500 of 150 steps run
-  once — zero divergence (2026-10-08).
+  once — zero divergence (2026-10-08). (was: that reading missed a cascade case — 3,491 of 3,500
+  runs at 120 steps converge on the engine before `87dc877`; seeds 128, 677, 1128, 1553 — until
+  2026-10-15.)
+- Restore stress run (2026-10-15): three devices on database files, random edits, backups and
+  restores, 60 steps. Faithful 1,300/1,300 (2,388 restores); with exchanges under way across a
+  restore and backups holding unstamped edits 2,300/2,300 (4,152 restores); plain convergence at
+  120 steps 3,500/3,500. Two merge bugs it found, fixed in `87dc877`, each fix's test failing
+  without it: (a) a parent's delete cascading over a child re-inserted after an older delete of it
+  left that delete unrecorded (an alive mark, no row); (b) one Yjs client id per device reused ids
+  across a row's lives after a delete and re-insert (restore seed 1236) — the id is now the device
+  plus the row's insert mark, and a device on the old engine merges with one on the new without
+  losing or doubling an edit (a frozen copy of the old engine in the tests). A batch applied after
+  its receiver's vector went back (an exchange under way across a restore) must be left whole:
+  applied, its orphan rule deleted a child on every device.
