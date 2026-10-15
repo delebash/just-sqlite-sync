@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 // The random three-device simulation the convergence test runs (and a debug script can replay).
 
-import { exchange, makeDevice, rng, setNow } from "./helpers.js";
+import path from "node:path";
+import { backupOf, exchange, fileDatabase, makeDevice, restore, rng, setNow } from "./helpers.js";
 
 const WORDS = ["night", "rain", "door", "lamp", "Cael", "brass", "the", "and", "slowly", "red"];
 
@@ -78,3 +79,52 @@ export function runOnce(seed, steps) {
   return devs;
 }
 
+
+/**
+ * The restore stress run (JustVoice's narrowings review, P16): the random three-device simulation
+ * above, on database files, with backups taken and restored at random on any device; then every
+ * pair settles. `adversarial` adds what the review found the first design lost data on: a batch
+ * another device made for the restored device's vector from before its restore, applied after it
+ * (an exchange under way), and backups taken while edits were noted but not yet stamped.
+ * Returns the devices (open — the caller closes them) and how many restores ran.
+ */
+export function runWithRestores(seed, steps, dir, { adversarial = false } = {}) {
+  setNow(Date.UTC(2026, 9, 8, 12, 0, 0));
+  const r = rng(seed * 7919);
+  const devs = ["a", "b", "c"].map((n) => makeDevice(n, { raw: fileDatabase(path.join(dir, `${n}.db`)) }));
+  devs[1].sync.joinLibrary(devs[0].sync.library);
+  devs[2].sync.joinLibrary(devs[0].sync.library);
+  const backups = [[], [], []];
+  let restores = 0;
+  for (let i = 0; i < steps; i++) {
+    const k = Math.floor(r() * 3);
+    randomOp(devs[k], r);
+    if (r() < 0.25) {
+      const x = devs[Math.floor(r() * 3)];
+      const y = devs[Math.floor(r() * 3)];
+      if (x !== y) exchange(x, y);
+    }
+    if (r() < 0.08) {
+      const k2 = Math.floor(r() * 3);
+      if (adversarial && r() < 0.5) {
+        // an edit noted by the triggers and not yet stamped when the backup is taken
+        devs[k2].raw.prepare("UPDATE chapters SET title = ? WHERE id = ?").run(`U${Math.floor(r() * 1000)}`, ["c0", "c1", "c2", "c3"][Math.floor(r() * 4)]);
+      }
+      backups[k2].push(backupOf(devs[k2], path.join(dir, `bk-${k2}-${i}.db`)));
+    }
+    if (r() < 0.06) {
+      const k3 = Math.floor(r() * 3);
+      if (backups[k3].length) {
+        const bk = backups[k3][Math.floor(r() * backups[k3].length)];
+        // an exchange under way: another device made its batch for the vector from before
+        const other = adversarial && r() < 0.5 ? devs[(k3 + 1 + Math.floor(r() * 2)) % 3] : null;
+        const early = other ? other.sync.changesSince(devs[k3].sync.vector()) : null;
+        restore(devs[k3], path.join(dir, `${devs[k3].name}.db`), bk);
+        if (early) devs[k3].sync.apply(early);
+        restores++;
+      }
+    }
+  }
+  settle(devs);
+  return { devs, restores };
+}

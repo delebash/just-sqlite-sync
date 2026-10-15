@@ -23,17 +23,24 @@
 // syncWithPeer calls them) · GET rev (an open window polls it; it moves when another device's
 // changes land) · GET status · PUT settings · POST folder/libraries · POST folder/run · POST run ·
 // POST export · POST import · POST peer/run · POST pair · POST pair/join.
+//
+// A restore of a backup (the kit's data router) takes `appSync.restoreHooks` — its beforeCopy,
+// afterCopy and afterTables: this device continues as a new device in sync, keeps its own `sync`
+// settings, and refuses a backup from another sync library while it syncs (docs/design.md §3.7).
 import { createHash, randomBytes } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { openSync } from "./engine.js";
-import { SyncError } from "./errors.js";
+import { REOPENED, RESTORE_OTHER_LIBRARY, SyncError } from "./errors.js";
 import { decodeFile, encodeFile, generateLibraryKey, readFileHeader } from "./file.js";
+import { afterRestoreCopy, beforeRestoreCopy, restoreLibraries, restorePending } from "./restore.js";
 import { folderSync } from "./transports/folder.js";
 import { plainJson, registerSyncRoutes, tooLarge } from "./transports/hono.js";
 import { syncWithPeer } from "./transports/http.js";
 import { nodeFolder } from "./transports/node-folder.js";
+
+const RETIRE = Symbol("retire");
 
 /** The `sync` settings section's fields, with their defaults. */
 export const SYNC_SETTINGS_DEFAULTS = Object.freeze({
@@ -59,22 +66,34 @@ const DEFAULT_ERRORS = {
   refused: (e) => Object.assign(statusError(409, e.message), { code: e.code }),
 };
 
+const identityFile = (dataDir) => path.join(dataDir, "sync-device.json");
+const thisMachine = () =>
+  createHash("sha256").update(`${os.hostname()}\u0000${os.userInfo().username}\u0000${process.platform}`).digest("hex").slice(0, 16);
+
 /**
  * This device's id, kept beside the database: `sync-device.json` in the data folder, tied to this
  * machine and user — a data folder copied to another computer becomes a new device instead of a
  * twin of this one (two devices with one id would lose each other's changes).
  */
 export function deviceIdentity(dataDir) {
-  const file = path.join(dataDir, "sync-device.json");
-  const machine = createHash("sha256").update(`${os.hostname()}\u0000${os.userInfo().username}\u0000${process.platform}`).digest("hex").slice(0, 16);
+  const machine = thisMachine();
   try {
-    const j = JSON.parse(readFileSync(file, "utf8"));
+    const j = JSON.parse(readFileSync(identityFile(dataDir), "utf8"));
     if (j && j.machine === machine && typeof j.id === "string" && j.id) return j.id;
   } catch {
     // none yet, or unreadable: a new identity
   }
+  return newIdentity(dataDir);
+}
+
+/**
+ * A new id for this device, written to `sync-device.json`: after a restore this device continues
+ * as a new device in sync (the id it had becomes an origin like any other — the engine's rule for
+ * a copied database). Returns the id.
+ */
+export function newIdentity(dataDir) {
   const id = randomBytes(8).toString("hex");
-  writeFileSync(file, JSON.stringify({ id, machine }));
+  writeFileSync(identityFile(dataDir), JSON.stringify({ id, machine: thisMachine() }));
   return id;
 }
 
@@ -109,14 +128,18 @@ export function reachableUrls(port, prefix = "/v1/sync") {
  * @param {string} [opts.prefix]
  * @param {object} [opts.platform] where the app runs, when not on a computer's Node (the phone's in-app
  *   server, a worker): `deviceId(dataDir)` → this device's id (default `deviceIdentity`; undefined lets
- *   the engine keep its own in the database), `deviceName()` → the name before the user sets one
- *   (default the computer's), `folder(path)` → the store a cloud-folder setting names (default
- *   `nodeFolder`)
+ *   the engine keep its own in the database), `newDeviceId(dataDir)` → after a restore, a new id that
+ *   `deviceId` returns from then on (default `newIdentity`; a platform whose `deviceId` returns
+ *   undefined needs none — the engine makes the new id), `deviceName()` → the name before the user
+ *   sets one (default the computer's), `folder(path)` → the store a cloud-folder setting names
+ *   (default `nodeFolder`)
  */
 export function createAppSync(opts) {
   const { app, appName, schemaVersion, tables, database, settings, auth, units, yjs, prefix = "/v1/sync" } = opts;
   const platform = {
     deviceId: (dataDir) => deviceIdentity(dataDir),
+    // a platform that keeps the id itself says how to make a new one (or lets the engine keep it)
+    newDeviceId: opts.platform?.deviceId ? null : (dataDir) => newIdentity(dataDir),
     deviceName: () => os.hostname(),
     folder: (where) => nodeFolder(where),
     ...(opts.platform ?? {}),
@@ -153,10 +176,25 @@ export function createAppSync(opts) {
 
   // ── the engine on this database ──────────────────────────────────────────────────────
 
-  /** The engine, wrapped so every apply that changed rows moves `rev`. */
+  /**
+   * The engine, wrapped so every apply that changed rows moves `rev` — and so it can be retired:
+   * after a restore, a sync run still holding the engine it started with (a folder read, a peer's
+   * answer on its way) stops at its next step instead of writing under the old identity.
+   */
   function tracked(sync) {
+    let retired = false;
     return new Proxy(sync, {
       get(target, prop) {
+        if (prop === RETIRE) {
+          return () => {
+            retired = true;
+          };
+        }
+        if (retired && typeof target[prop] === "function") {
+          return () => {
+            throw new SyncError(REOPENED, "sync reopened after a backup was restored — the next sync continues");
+          };
+        }
         if (prop === "apply") {
           return (batch, o) => {
             const r = target.apply(batch, o);
@@ -173,7 +211,11 @@ export function createAppSync(opts) {
   /** Open sync on the app's tables (after its database is ready). Safe to call again. */
   function open(dataDir) {
     const cfg = readSettings();
-    const sync = openSync(database(), {
+    const db = database();
+    // a restore copied a backup in and sync hasn't reopened since (the server may have stopped in
+    // between): this device continues as a new device
+    if (restorePending(db)) platform.newDeviceId?.(dataDir);
+    const sync = openSync(db, {
       app,
       schemaVersion,
       tables: tables(),
@@ -216,6 +258,63 @@ export function createAppSync(opts) {
     const s = get();
     if (!s) throw errors.notReady();
     return s;
+  }
+
+  // ── restoring a backup (the kit's data router: beforeCopy, afterCopy, afterTables) ───────
+
+  let kept = null; // this device's `sync` settings, read before the copy, written back after
+
+  /**
+   * Before the copy, inside the restore's transaction (`h` its connection, the backup attached as
+   * `src`). While this device syncs (a cloud folder or a paired device is set), a backup from
+   * another sync library is refused — its contents would merge into this library on every device.
+   * A device that isn't syncing takes it, and stays in its own library.
+   */
+  function beforeCopy(h) {
+    const cfg = readSettings();
+    const syncing = !!cfg.folder || (cfg.peers ?? []).length > 0;
+    if (syncing) {
+      const { live, backup } = restoreLibraries(h);
+      if (live && backup && live !== backup) {
+        throw errors.refused(
+          new SyncError(
+            RESTORE_OTHER_LIBRARY,
+            "This backup is from another sync library. Stop using the cloud folder and remove your paired devices in Settings → Sync, then restore it.",
+            { library: backup },
+          ),
+        );
+      }
+    }
+    kept = cfg;
+    beforeRestoreCopy(h);
+  }
+
+  /** After the copy, inside the restore's transaction: the backup's sync stamps come with its rows. */
+  function afterCopy(h) {
+    afterRestoreCopy(h);
+  }
+
+  /**
+   * Right after the copy commits: this device's own `sync` settings go back (the library key, the
+   * paired devices, the folder, the device name — the backup's are older, or another computer's),
+   * and sync reopens as a new device. The id it had stays an origin holding what the backup held of
+   * it; the other devices' newer work comes back on the next sync. `dataDir` defaults to the one
+   * sync was opened with.
+   */
+  function afterRestore(dataDir) {
+    const dir = dataDir ?? current?.dataDir;
+    if (current) current.sync[RETIRE]();
+    current = null;
+    if (kept) {
+      const cfg = kept;
+      kept = null;
+      try {
+        writeSettings(cfg);
+      } catch (e) {
+        log.warning(`sync settings couldn't be put back after the restore: ${e?.message ?? e}`);
+      }
+    }
+    return dir == null ? null : open(dir);
   }
 
   // ── running a sync ───────────────────────────────────────────────────────────────────
@@ -482,5 +581,19 @@ export function createAppSync(opts) {
     });
   }
 
-  return { open, get, flush, reset, stop, networkHost, readSettings, routes, runFolder, runPeers };
+  return {
+    open,
+    get,
+    flush,
+    reset,
+    stop,
+    networkHost,
+    readSettings,
+    routes,
+    runFolder,
+    runPeers,
+    afterRestore,
+    /** A restore's steps, as the kit's data router names them (makeDataRouter's options). */
+    restoreHooks: { beforeCopy, afterCopy, afterTables: () => void afterRestore() },
+  };
 }

@@ -4,7 +4,7 @@
 // column that merges through Yjs), and sync opened on it.
 
 import Database from "better-sqlite3";
-import { betterSqlite3Adapter, openSync, plainTextAdapter } from "../src/index.js";
+import { afterRestoreCopy, beforeRestoreCopy, betterSqlite3Adapter, openSync, plainTextAdapter } from "../src/index.js";
 
 export const SCHEMA = `
 CREATE TABLE projects (id TEXT PRIMARY KEY, title TEXT NOT NULL, author TEXT);
@@ -83,9 +83,71 @@ export function makeDevice(name, { deviceId, file = ":memory:", schemaVersion = 
     base.exec(SCHEMA);
   }
   const adapter = betterSqlite3Adapter(base);
-  const sync = openSync(adapter, { app: "testapp", schemaVersion, tables, deviceId: deviceId ?? `dev-${name}`, deviceName: name, now });
-  const db = flushingDb(base, () => sync);
-  return { name, db, raw: base, adapter, sync };
+  const open = (id) => openSync(adapter, { app: "testapp", schemaVersion, tables, deviceId: id, deviceName: name, now });
+  const dev = { name, raw: base, adapter, sync: open(deviceId ?? `dev-${name}`) };
+  dev.db = flushingDb(base, () => dev.sync);
+  /** Open sync again under a new device id — what the app layer does after a restore. */
+  dev.reopen = () => {
+    dev.restores = (dev.restores ?? 0) + 1;
+    dev.sync = open(`dev-${name}~${dev.restores}`);
+    return dev.sync;
+  };
+  return dev;
+}
+
+/**
+ * A device's database as a file (a restore copies on its own connection), with the test schema —
+ * kept fast: the journal in memory, nothing synced to disk.
+ */
+export function fileDatabase(file) {
+  const raw = new Database(file);
+  raw.pragma("journal_mode = MEMORY");
+  raw.pragma("synchronous = OFF");
+  raw.pragma("foreign_keys = ON");
+  raw.exec(SCHEMA);
+  return raw;
+}
+
+/** Back up a device's database the way the kit does (VACUUM INTO a clean copy). */
+export function backupOf(dev, file) {
+  dev.raw.exec(`VACUUM INTO '${file.replaceAll("'", "''")}'`);
+  return file;
+}
+
+export const APP_TABLES = ["projects", "chapters", "scenes", "images"]; // parents first
+
+/**
+ * Restore a backup over a device's database file as the kit's data router does — on its own
+ * connection, the backup attached as `src`, one transaction: the sync step before the copy, clear
+ * the live tables, copy the backup's in, the sync step after it.
+ */
+export function restoreCopy(file, backup, { beforeCopy = beforeRestoreCopy, afterCopy = afterRestoreCopy, tables = APP_TABLES } = {}) {
+  const raw = new Database(file);
+  const h = {
+    run: (sql, params = []) => raw.prepare(sql).run(...params),
+    all: (sql, params = []) => raw.prepare(sql).all(...params),
+    exec: (sql) => raw.exec(sql),
+  };
+  try {
+    raw.pragma("journal_mode = MEMORY");
+    raw.pragma("synchronous = OFF");
+    raw.prepare("ATTACH ? AS src").run(backup);
+    raw.transaction(() => {
+      beforeCopy(h);
+      for (const t of [...tables].reverse()) raw.exec(`DELETE FROM main."${t}"`);
+      for (const t of tables) raw.exec(`INSERT INTO main."${t}" SELECT * FROM src."${t}"`);
+      afterCopy(h);
+    })();
+    raw.exec("DETACH src");
+  } finally {
+    raw.close();
+  }
+}
+
+/** A whole restore: the copy, then sync reopened under a new device id. */
+export function restore(dev, file, backup) {
+  restoreCopy(file, backup);
+  return dev.reopen();
 }
 
 /** Everything a user would see: the synced tables' rows, in a stable order. */

@@ -34,7 +34,7 @@ tables — is this engine's model.
 ### 3.1 Tables the engine owns
 
 `sync_meta` (library id, device id and name, this device's sequence, the trigger hash, transport
-state) · `sync_clock` (per synced field: newest stamp, origin device, origin sequence; per row:
+state, a restore's mark — §3.7) · `sync_clock` (per synced field: newest stamp, origin device, origin sequence; per row:
 `col = '-'`, alive 1 / deleted 0) · `sync_vector` (per other device, the highest sequence held) ·
 `sync_text` (per rich-text field: its Yjs state and the stamp it was brought up to) · `sync_peers`
 (devices and places synced with).
@@ -105,6 +105,63 @@ sender's vector. History-free storage means an older change of a field may be go
 superseded by a newer change the batch does carry (cr-sqlite's rule). A scoped batch (some books)
 is *partial*: it merges but advances no vector.
 
+A batch sent over HTTP also names `base`, the vector it was made for. It holds every change above
+`base`, so it counts on the receiver holding at least `base` of every origin; a receiver that holds
+less (it restored a backup while the exchange was under way, §3.7) leaves the whole batch for the
+next exchange. Applied, its changes could build on rows the receiver no longer has — a field edit
+on a row inserted under another origin, a chapter whose book is gone here, which the orphan rule
+(§3.4) would then delete on every device. A file carries no `base`: a folder's files are read in
+order, each following the sender's earlier ones.
+
+### 3.7 Restoring a backup
+
+A restore (the kit's data router) copies a backup's tables over the live ones on its own
+connection. Left alone, the triggers would note every restored row as a change made now, and the
+next sync would send the backup's old rows everywhere as the newest edits — overwriting the work
+done since and deleting what was made since (JustVoice's narrowings review, P16).
+
+**A restored device continues as a new device** (decided 2026-10-15) — the engine's own rule for a
+copied database (§3.1 `sync_meta`; `openSync` under another `deviceId`). The restore runs two steps
+inside its transaction around the copy (`src/restore.js`): before it, the triggers go quiet; after
+it, the backup's `sync_clock`, `sync_text`, `sync_vector` and `sync_pending` replace the live ones,
+the backup's own device's entry joins the vector (a device keeps its own sequence in `sync_meta`),
+and `sync_meta.restore` marks the database restored. `sync_meta` otherwise stays this database's:
+its library, device id and name. The next `openSync` must name a new device id (or none, when the
+engine keeps the id in the database; the old one is refused). In one transaction the old id
+retires at what the backup held of it — an origin like any other — and the transports' progress
+(`state:*`) goes, so the new id writes its own folder files from the first and reads every other
+device's again, the old id's too. Then the changes the backup had noted but not stamped are
+stamped just after its newest stamp, and rows it held with no stamps at all (a backup from before
+sync) get the oldest stamp there is, both under the new id; the mark goes.
+
+So everything the backup holds keeps its age, and the other devices' newer work — and what this
+device itself made after the backup and had synced — comes back and wins by its newer stamps.
+What this device changed after the backup and never synced is gone, as it would be without sync.
+Nothing is ever numbered twice: the old id stops, and the new one starts at 1. A rich-text edit
+made right after the restore is a new Yjs client's (the client id follows the device id), never a
+reuse of the old one's ids.
+
+**Why not keep the old id with a "floor"** (the first design: the device's vector says it holds
+only its own changes the backup held, until an exchange brings the rest back): a stress run
+(three devices, random edits, backups and restores, 300 runs) ended permanently different in 6 —
+an exchange under way during the restore, a backup taken while a floor was on, Yjs ids reused, a
+reset then a restore, the step never running — and with endless re-sending in ~26. The new
+identity passed the same 300.
+
+The costs: one more origin in every vector per restore; the devices list shows the restored device
+as a new entry beside the old one; its old folder subfolder stays until removed.
+
+The app layer (`src/app.js`) adds the rest: `restoreHooks` are the kit's `beforeCopy`, `afterCopy`
+and `afterTables`. Before the copy, while this device syncs (a cloud folder or a paired device is
+set), a backup from another sync library is refused (409, `restore-other-library`; decided
+2026-10-15) — every fresh database starts its own library, so a device that isn't syncing takes
+any backup, and stays in its own library. This device's `sync` settings (the library key, the
+paired devices, the folder, the name) are read before the copy and written back after it: the
+backup's are older, or another computer's. After the copy, sync reopens under a new id
+(`newIdentity`, `sync-device.json`); a sync run still holding the engine from before stops with
+`reopened` instead of writing as the old device. If the server stops between the copy and that
+step, the mark makes the next start take the new id.
+
 ## 4 · Transports
 
 - **The file** (`file-format.md`): gzip of JSON, optionally AES-256-GCM with the library key; the
@@ -126,12 +183,17 @@ is *partial*: it merges but advances no vector.
   texts (Yjs keeps both insertions).
 - A device whose clock is more than a day wrong can't sync until it's fixed (by design).
 - Large edits beyond the plain-text diff's limit merge coarsely.
+- A restored device is a new device (§3.7): the devices list shows it as a new entry, and its old
+  folder subfolder stays until removed.
 
 ## 6 · Tests
 
 `tests/` — the engine's rules one by one; the **convergence** test (three devices, random edits,
 deletes, cascades, re-inserts, key changes and text edits on a small shared id space, random sync
 order; every seeded run must end identical with clean foreign keys and nothing left to send; 300
-runs in the suite, 3,500 more run once while building); text diffs; change files (round trip,
+runs in the suite, 3,500 more run once while building); the **restore** stress run (the same random
+devices on database files, with backups taken and restored at random — 300 runs; and 300 more with
+batches made before a restore applied after it and backups holding unstamped edits — each must
+end identical with nothing left to send); text diffs; change files (round trip,
 encryption, tampering); folders (relay, compaction, a reader behind a snapshot); HTTP (pairing,
 tokens); and the same engine on the official SQLite WASM build syncing with better-sqlite3.

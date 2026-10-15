@@ -1,31 +1,39 @@
 // SPDX-License-Identifier: MIT
 // The app layer (src/app.js): two app servers — each a database, its `sync` settings and tokens
 // in a settings table, the routes on Hono — exchanging a file by hand, refusing another
-// library until joined, pairing with a device that's off, and the settings and status routes.
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+// library until joined, pairing with a device that's off, the settings and status routes, and
+// restoring a backup through the kit's restore hooks.
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { Hono } from "hono";
 import { afterEach, describe, expect, it } from "vitest";
 import { createAppSync } from "../src/app.js";
-import { betterSqlite3Adapter } from "../src/index.js";
-import { SCHEMA, TABLES } from "./helpers.js";
+import { REOPENED, RESTORE_OTHER_LIBRARY, betterSqlite3Adapter, restorePending } from "../src/index.js";
+import { APP_TABLES, SCHEMA, TABLES, fileDatabase, restoreCopy } from "./helpers.js";
 
 const cleanup = [];
 afterEach(async () => {
   for (const fn of cleanup.splice(0)) await fn();
 });
 
-/** One app: its database, its settings rows, its server with the sync routes. */
-async function makeApp(name) {
+/**
+ * One app: its database, its settings rows, its server with the sync routes. `file`: the database
+ * is a file in the data folder (a restore copies on its own connection), and `make()` builds
+ * another app layer on it (the server started again).
+ */
+async function makeApp(name, { file = false } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), `appsync-${name}-`));
-  const db = new Database(":memory:");
-  db.pragma("foreign_keys = ON");
-  db.exec(SCHEMA);
+  const dbFile = file ? path.join(dir, "app.db") : null;
+  const db = dbFile ? fileDatabase(dbFile) : new Database(":memory:");
+  if (!dbFile) {
+    db.pragma("foreign_keys = ON");
+    db.exec(SCHEMA);
+  }
   const getRow = (key) => db.prepare("SELECT value FROM settings WHERE key = ?").get(key)?.value;
   const putRow = (key, value) => db.prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(key, value);
-  const appSync = createAppSync({
+  const make = () => createAppSync({
     app: "testapp",
     appName: "Test App",
     schemaVersion: 1,
@@ -36,6 +44,7 @@ async function makeApp(name) {
     units: { scope: (ids) => (t, pk) => t !== "images" && ids.includes(pk[0]), name: (ids) => db.prepare("SELECT title FROM projects WHERE id = ?").get(ids[0])?.title, extension: "tsync" },
     log: { warning() {} },
   });
+  const appSync = make();
   appSync.open(dir);
   const server = new Hono();
   // The host's error answer, as Fastify's default one: an error's own status code.
@@ -43,14 +52,32 @@ async function makeApp(name) {
   appSync.routes(server);
   cleanup.push(async () => {
     appSync.stop();
+    db.close();
     rmSync(dir, { recursive: true, force: true });
   });
   const write = (sql) => {
     db.exec(sql);
     appSync.flush();
   };
-  return { db, appSync, server, write };
+  return { db, dbFile, dir, appSync, server, write, make, putRow };
 }
+
+/** What the kit's data router does with an app's restore hooks: the copy (the app's tables and its
+ * settings table) between beforeCopy and afterCopy, then afterTables once it committed. */
+function restoreThrough(one, backup) {
+  const { beforeCopy, afterCopy, afterTables } = one.appSync.restoreHooks;
+  restoreCopy(one.dbFile, backup, { beforeCopy, afterCopy, tables: [...APP_TABLES, "settings"] });
+  afterTables();
+}
+
+function backupOf(one, name) {
+  const file = path.join(one.dir, `${name}.db`);
+  one.db.exec(`VACUUM INTO '${file.replaceAll("'", "''")}'`);
+  return file;
+}
+
+const idOnFile = (one) => JSON.parse(readFileSync(path.join(one.dir, "sync-device.json"), "utf8")).id;
+const titles = (one) => one.db.prepare("SELECT title FROM projects ORDER BY id").all().map((r) => r.title);
 
 describe("the app layer", () => {
   it("a book exported by hand imports on another device after joining its library", async () => {
@@ -158,5 +185,80 @@ describe("the app layer", () => {
     expect(await put.json()).toEqual({ ok: true, restartRequired: true });
     expect(one.appSync.get().deviceName).toBe("Study laptop");
     expect(one.appSync.networkHost()).toBe(null); // no token yet: stays on this computer
+  });
+});
+
+describe("the app layer: restoring a backup", () => {
+  const LIVE = { deviceName: "Studio PC", autoMinutes: 0, key: "live-key", folder: null, peers: [{ url: "http://127.0.0.1:9/v1/sync", token: "t1", name: "Laptop" }] };
+
+  it("this computer continues as a new device in sync and keeps its own sync settings", async () => {
+    const one = await makeApp("one", { file: true });
+    one.write("INSERT INTO projects VALUES ('p1', 'The Lamp', NULL)");
+    one.putRow("sync", JSON.stringify({ deviceName: "Before the backup", autoMinutes: 0, key: "old-key" }));
+    const backup = backupOf(one, "backup");
+    one.putRow("sync", JSON.stringify(LIVE));
+    one.write("UPDATE projects SET title = 'The Brass Lamp' WHERE id = 'p1'");
+    const old = one.appSync.get();
+    const before = old.device;
+    const library = old.library;
+
+    restoreThrough(one, backup);
+    const now = one.appSync.get();
+    expect(titles(one)).toEqual(["The Lamp"]);
+    expect(now.device).not.toBe(before);
+    expect(idOnFile(one)).toBe(now.device);
+    expect(now.vector()[before]).toBeGreaterThan(0); // the id it had: an origin, at what the backup held
+    expect(now.library).toBe(library);
+    expect(one.appSync.readSettings()).toMatchObject(LIVE); // not the backup's
+    expect(restorePending(betterSqlite3Adapter(one.db))).toBe(false);
+    // a sync run still holding the engine from before stops instead of writing as the old device
+    expect(() => old.vector()).toThrow(expect.objectContaining({ code: REOPENED }));
+  });
+
+  it("a backup from another sync library: refused while this computer syncs, taken when it doesn't", async () => {
+    const one = await makeApp("one", { file: true });
+    one.write("INSERT INTO projects VALUES ('p1', 'Mine', NULL)");
+    const other = await makeApp("other", { file: true });
+    other.write("INSERT INTO projects VALUES ('p9', 'Theirs', NULL)");
+    const backup = backupOf(other, "theirs");
+    const library = one.appSync.get().library;
+    const before = one.appSync.get().device;
+
+    one.putRow("sync", JSON.stringify(LIVE)); // a paired device is set
+    let refused;
+    try {
+      restoreThrough(one, backup);
+    } catch (e) {
+      refused = e;
+    }
+    expect(refused).toMatchObject({ statusCode: 409, code: RESTORE_OTHER_LIBRARY });
+    expect(refused.message).toBe("This backup is from another sync library. Stop using the cloud folder and remove your paired devices in Settings → Sync, then restore it.");
+    expect(titles(one)).toEqual(["Mine"]); // nothing copied
+    expect(one.appSync.get().device).toBe(before);
+
+    one.putRow("sync", JSON.stringify({ ...LIVE, peers: [], folder: "C:/Dropbox/Test" })); // a cloud folder is set
+    expect(() => restoreThrough(one, backup)).toThrow(expect.objectContaining({ code: RESTORE_OTHER_LIBRARY }));
+
+    one.putRow("sync", JSON.stringify({ ...LIVE, peers: [], folder: null })); // not syncing
+    restoreThrough(one, backup);
+    expect(titles(one)).toEqual(["Theirs"]);
+    expect(one.appSync.get().library).toBe(library); // it stays in its own library
+    expect(one.appSync.get().device).not.toBe(before);
+  });
+
+  it("the server stopped right after the copy: the next start continues as a new device", async () => {
+    const one = await makeApp("one", { file: true });
+    one.write("INSERT INTO projects VALUES ('p1', 'The Lamp', NULL)");
+    const backup = backupOf(one, "backup");
+    const before = one.appSync.get().device;
+    const { beforeCopy, afterCopy } = one.appSync.restoreHooks;
+    restoreCopy(one.dbFile, backup, { beforeCopy, afterCopy, tables: [...APP_TABLES, "settings"] }); // no afterTables
+    one.appSync.stop();
+    const again = one.make();
+    const s = again.open(one.dir);
+    again.stop();
+    expect(s.device).not.toBe(before);
+    expect(idOnFile(one)).toBe(s.device);
+    expect(s.vector()[before]).toBeGreaterThan(0);
   });
 });

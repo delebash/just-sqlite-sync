@@ -52,6 +52,10 @@ body, and decrypting fails if either was altered.
 | `o`, `n` | origin device and its sequence number |
 
 `vector` maps device id → the highest sequence the sender held; it's `{}` in a partial file.
+A batch sent over HTTP also names `base`, the vector it was made for; a receiver holding less than
+that of any origin (it restored a backup while the exchange was under way) leaves the whole batch
+for the next exchange (`design.md` §3.6). A file doesn't carry it: a folder's files are read in
+order.
 
 ## The library key
 

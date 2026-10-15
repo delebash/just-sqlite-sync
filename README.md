@@ -120,7 +120,7 @@ way.
 |---|---|
 | `openSync(adapter, options)` | Opens sync on a database: creates its tables (`sync_*`), the triggers, and adopts rows that existed before. Returns the `sync` object. |
 | `sync.changesSince(vector, { scope })` | The changes a device holding `vector` lacks, as a batch. `{}` = everything. `scope(table, pkValues)` keeps only some rows (a by-hand export); such a batch is *partial* and advances nobody's vector. |
-| `sync.apply(batch, { join })` | Applies a batch in one transaction. Refuses another app, another library (unless `join` — pairing a new device), a newer schema, and stamps more than a day in the future (a device with a wrong clock). Returns `{ applied, skipped, rows, tables, problems }`. |
+| `sync.apply(batch, { join })` | Applies a batch in one transaction. Refuses another app, another library (unless `join` — pairing a new device), a newer schema, and stamps more than a day in the future (a device with a wrong clock). Returns `{ applied, skipped, rows, tables, problems }`; a batch made for more than this device now holds (it restored a backup while the exchange was under way) is left whole: `{ applied: 0, stale: true, … }`, and the next exchange brings it all. |
 | `sync.flush()` | Stamps the changes the triggers noted since the last flush. Call it after your saves (an `onResponse` hook on write routes is one place); it also runs before every read or apply. |
 | `sync.vector()` | This device's vector. |
 | `sync.library` / `sync.device` / `sync.deviceName` | Identity. `setDeviceName(name)`, `joinLibrary(id)`. |
@@ -130,9 +130,11 @@ way.
 | `folderSync(sync, store, { key, snapshotEvery, name, state })` | `.sync()`, `.pull()`, `.push()`, `.restore()` (rebuild this device from its own files), `.libraries()` (for "join the library in this folder"), `.removeDevice(id)`. `state` (default `"folder"`) keeps a second folder's progress apart (the phone's storage guard beside its cloud folder). `store` is `{ list, read, write, remove }`: `nodeFolder(dir)` on disk, `oneDriveAppFolder({ getToken })`, `dropboxAppFolder({ getToken })`. |
 | `encodeFile(batch, { key })` / `decodeFile(bytes, { key })` / `readFileHeader(bytes)` | The change file; with `key`, AES-256-GCM. `generateLibraryKey()` makes a key. |
 | `plainTextAdapter()` | Rich-text merging for a plain-text column. Other kinds (HTML from an editor) bring their own adapter: `{ apply(ydoc, value), render(ydoc) }`. |
+| `beforeRestoreCopy(h)` / `afterRestoreCopy(h)` / `restorePending(adapter)` | Restoring a backup over a synced database: the two steps run inside the restore's transaction around its table copy (`h` its connection: `run`, `all`, `exec`; the backup attached as `src`). The backup's stamps come with its rows, and the next `openSync` must name a new `deviceId` (or none, when the engine keeps the id) — `restorePending` says so. The device continues as a new device; the other devices' newer work wins on the next sync (`docs/design.md` §3.7). An app server uses `appSync.restoreHooks` instead. |
 
 Errors are `SyncError` with a `code`: `library-mismatch`, `schema-too-new`, `clock-drift`,
-`bad-file`, `wrong-key`, `bad-config`, `peer`.
+`bad-file`, `wrong-key`, `bad-config`, `peer`, `reopened` (a sync run held the engine from before a
+restore), `restore-other-library` (the app layer refused a backup from another sync library).
 
 ### In an app's server — `@delebash/sqlite-sync/app` (Node, Hono)
 
@@ -152,6 +154,7 @@ const appSync = createAppSync({
   readJson,                         // optional: the app's JSON body reader (default plain JSON)
 });
 appSync.open(dataDir);              // after the database is ready; reset(dataDir) after a wipe
+makeDataRouter({ …, ...appSync.restoreHooks }); // the kit's restore: beforeCopy, afterCopy, afterTables
 app.use("*", async (c, next) => { await next(); appSync.flush(); }); // before the routes
 appSync.routes(app);                // /v1/sync/… on the app's own Hono
 const host = appSync.networkHost() ?? "127.0.0.1"; // the network only when paired devices may connect
@@ -168,10 +171,22 @@ library, its key, a new token and this server's addresses — shown as a QR code
 (adopts the code's library and key even when the other device can't be reached, so a shared
 folder still carries the changes). JustWrite and JustVoice use it.
 
+**Restoring a backup** (`restoreHooks`, the kit's data router's `beforeCopy` / `afterCopy` /
+`afterTables`): this device continues as a new device in sync — a new id in `sync-device.json`
+(`newIdentity(dataDir)`), the old one an origin holding what the backup held — so the other
+devices' newer work comes back and wins. It shows in the other devices' lists as a new entry beside
+the old one, and its old folder subfolder stays until removed. This device's own `sync` settings
+(the library key, the paired devices, the folder, the name) are kept, not the backup's. While a
+cloud folder or a paired device is set, a backup from another sync library is refused (409,
+`restore-other-library`); a device that isn't syncing takes any backup and stays in its own
+library. If the server stops between the copy and the new id, the next `open` takes it
+(`docs/design.md` §3.7).
+
 Where Node's disk isn't there — the phone's in-app server, a worker — `platform` says how:
 `{ deviceId: () => undefined, deviceName: () => "Android phone", folder: (setting) => store }` (the
 engine then keeps this device's id in the database; the cloud folder is a store such as
-`oneDriveAppFolder`).
+`oneDriveAppFolder`). A platform whose `deviceId` returns an id it keeps elsewhere also gives
+`newDeviceId(dataDir)` — the new id after a restore, which `deviceId` returns from then on.
 
 ## Rules for a synced table
 

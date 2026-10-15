@@ -24,3 +24,7 @@ export const WRONG_KEY = "wrong-key";
 export const BAD_CONFIG = "bad-config";
 /** A peer or folder answered something the engine can't use. */
 export const PEER = "peer";
+/** Sync reopened under a new device id (a backup was restored) while this run held the old one. */
+export const REOPENED = "reopened";
+/** A restore refused: the backup is from another sync library, and this device is syncing. */
+export const RESTORE_OTHER_LIBRARY = "restore-other-library";

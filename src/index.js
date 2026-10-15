@@ -5,6 +5,7 @@
 // disk) and "@delebash/sqlite-sync/hono" (the routes on an app's Hono server).
 
 export { openSync, FORMAT_VERSION } from "./engine.js";
+export { beforeRestoreCopy, afterRestoreCopy, restorePending } from "./restore.js";
 export { createClock, formatStamp, parseStamp } from "./clock.js";
 export { plainTextAdapter } from "./text.js";
 export { encodeFile, decodeFile, readFileHeader, generateLibraryKey } from "./file.js";
@@ -22,4 +23,6 @@ export {
   WRONG_KEY,
   BAD_CONFIG,
   PEER,
+  REOPENED,
+  RESTORE_OTHER_LIBRARY,
 } from "./errors.js";

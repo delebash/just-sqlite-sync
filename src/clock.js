@@ -29,6 +29,25 @@ export function parseStamp(stamp) {
 }
 
 /**
+ * Stamps for `deviceId` just after `stamp`, in order — the changes a restored backup had noted
+ * but not yet stamped keep the backup's age (just after its newest stamp), so newer work made
+ * elsewhere since the backup still wins over them.
+ * @param {string | null | undefined} stamp
+ * @param {string} deviceId
+ */
+export function stampsAfter(stamp, deviceId) {
+  let { ms, counter } = stamp ? parseStamp(stamp) : { ms: 0, counter: 0 };
+  return () => {
+    if (counter < CTR_MAX) counter++;
+    else {
+      ms++;
+      counter = 0;
+    }
+    return formatStamp(ms, counter, deviceId);
+  };
+}
+
+/**
  * @param {string} deviceId
  * @param {{ now?: () => number, maxDriftMs?: number }} [options]
  */

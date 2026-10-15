@@ -9,7 +9,7 @@
 //     highest sequence it holds — "what does the other side lack" is a comparison of vectors
 
 import { randomId, hash52, fromBase64, toBase64 } from "./bytes.js";
-import { createClock } from "./clock.js";
+import { createClock, formatStamp, stampsAfter } from "./clock.js";
 import { BAD_CONFIG, LIBRARY_MISMATCH, SCHEMA_TOO_NEW, SyncError } from "./errors.js";
 import { ENGINE_SQL, TRIGGERS_PER_TABLE, TRIGGER_PREFIX, quoteIdent, triggerSql } from "./schema.js";
 import { textOps } from "./text.js";
@@ -50,22 +50,47 @@ export function openSync(db, options) {
     setMeta("library", library);
   }
   let device = getMeta("device");
-  if (options.deviceId && options.deviceId !== device) {
+  let deviceId = options.deviceId;
+  // A restore copied a backup's rows and stamps in (src/restore.js): this device continues as a
+  // new device. The id it had may have made changes after the backup that other devices hold, so
+  // it can't go on numbering from the backup — and continuing from the live sequence would claim
+  // changes the backup lacks. It retires instead, an origin holding what the backup held of it.
+  const restored = getMeta("restore") === "copied";
+  if (restored) {
+    if (deviceId && deviceId === device) {
+      throw new SyncError(BAD_CONFIG, "this database was restored from a backup — open it under a new deviceId (the app layer's newIdentity makes one)");
+    }
+    deviceId ??= randomId(8); // the id lives in this database (none given): a new one here
+  }
+  if (deviceId && deviceId !== device) {
     // A database opened under another device id (a copied file, a restored backup): the old id
     // stays an origin like any other device, and this one continues as the new id.
-    if (device) {
-      db.run("INSERT INTO sync_vector (origin, seq) VALUES (?, ?) ON CONFLICT(origin) DO UPDATE SET seq = max(seq, excluded.seq)", [
-        device,
-        Number(getMeta("seq") ?? 0),
-      ]);
-    }
-    device = options.deviceId;
-    setMeta("device", device);
-    // this id may have synced before (its changes are in the clock as an origin)
-    const prior = db.get("SELECT max(oseq) AS n FROM sync_clock WHERE origin = ?", [device])?.n ?? 0;
-    const vec = db.get("SELECT seq FROM sync_vector WHERE origin = ?", [device])?.seq ?? 0;
-    setMeta("seq", Math.max(prior, vec));
-    db.run("DELETE FROM sync_vector WHERE origin = ?", [device]);
+    db.transaction(() => {
+      if (restored && device) {
+        // what the backup held of the old id's changes (restore.js put the backup's own entry in)
+        const held = db.get("SELECT seq FROM sync_vector WHERE origin = ?", [device])?.seq ?? 0;
+        db.run("DELETE FROM sync_vector WHERE origin = ?", [device]);
+        setMeta("seq", held);
+        // the transports' progress was the old id's: the new one writes its own folder files from
+        // the first, and reads every other device's (the old id's too) again
+        db.run("DELETE FROM sync_meta WHERE key LIKE 'state:%'");
+      }
+      if (device) {
+        db.run("INSERT INTO sync_vector (origin, seq) VALUES (?, ?) ON CONFLICT(origin) DO UPDATE SET seq = max(seq, excluded.seq)", [
+          device,
+          Number(getMeta("seq") ?? 0),
+        ]);
+      }
+      device = deviceId;
+      setMeta("device", device);
+      // this id may have synced before (its changes are in the clock as an origin)
+      const prior = db.get("SELECT max(oseq) AS n FROM sync_clock WHERE origin = ?", [device])?.n ?? 0;
+      const vec = db.get("SELECT seq FROM sync_vector WHERE origin = ?", [device])?.seq ?? 0;
+      setMeta("seq", Math.max(prior, vec));
+      db.run("DELETE FROM sync_vector WHERE origin = ?", [device]);
+      // the backup's unstamped changes and stamp-less rows are recorded below (adopting)
+      if (restored) setMeta("restore", "adopting");
+    });
   } else if (!device) {
     device = randomId(8);
     setMeta("device", device);
@@ -146,13 +171,14 @@ export function openSync(db, options) {
    * it after its saves so stamps follow the order edits were made in.
    * @returns {number} how many fields were stamped
    */
-  function flush() {
+  function flush(stampAt) {
     const pending = db.all("SELECT tbl, pk, col, alive FROM sync_pending");
     if (!pending.length) return 0;
     db.transaction(() => {
       for (const p of pending) {
         if (!info[p.tbl]) continue;
-        const stamp = clock.tick();
+        const stamp = stampAt ? stampAt() : clock.tick();
+        if (stampAt) clock.seed(stamp);
         const n = ++seq;
         db.run("INSERT OR REPLACE INTO sync_clock (tbl, pk, col, stamp, origin, oseq, alive) VALUES (?, ?, ?, ?, ?, ?, ?)", [
           p.tbl,
@@ -171,11 +197,24 @@ export function openSync(db, options) {
   }
 
   // --- adopt rows that exist but were never recorded (first open; a newly synced table) -------
-  flush();
-  adoptExisting();
+  // After a restore (the new id taken above): the changes the backup had noted but not stamped
+  // keep the backup's age, just after its newest stamp, and rows it held with no stamps at all (a
+  // backup from before sync) are older than any change — newer work made elsewhere wins over both.
+  if (getMeta("restore") === "adopting") {
+    db.transaction(() => {
+      flush(stampsAfter(db.get("SELECT max(stamp) AS s FROM sync_clock")?.s, device));
+      adoptExisting({ asOld: true });
+      db.run("DELETE FROM sync_meta WHERE key = 'restore'");
+    });
+  } else {
+    flush();
+    adoptExisting();
+  }
 
-  function adoptExisting() {
+  function adoptExisting({ asOld = false } = {}) {
     const insertClock = "INSERT OR REPLACE INTO sync_clock (tbl, pk, col, stamp, origin, oseq, alive) VALUES (?, ?, ?, ?, ?, ?, ?)";
+    // the oldest stamp there is (this device's, so it's unique to this restore)
+    const oldest = formatStamp(0, 0, device);
     db.transaction(() => {
       for (const t of Object.values(info)) {
         const pkJson = `json_array(${t.pk.map((c) => `t.${quoteIdent(c)}`).join(", ")})`;
@@ -184,7 +223,7 @@ export function openSync(db, options) {
           [t.name],
         );
         for (const { k } of rows) {
-          const stamp = clock.tick();
+          const stamp = asOld ? oldest : clock.tick();
           const n = ++seq;
           db.run(insertClock, [t.name, k, "-", stamp, device, n, 1]);
           for (const col of t.data) db.run(insertClock, [t.name, k, col, stamp, device, n, null]);
@@ -298,6 +337,9 @@ export function openSync(db, options) {
       created: new Date((now ?? Date.now)()).toISOString(),
       partial,
       vector: partial ? {} : vector(),
+      // the vector this batch was made for: a receiver applies it only while it still holds that
+      // much (a restore in between took it back to a backup's — see apply)
+      base: peerVector || {},
       changes,
     };
   }
@@ -325,6 +367,16 @@ export function openSync(db, options) {
       throw new SyncError(SCHEMA_TOO_NEW, `these changes come from a newer version of ${app} (schema ${batch.schema}; this device has ${schemaVersion}) — update ${app} on this device`, {
         schema: batch.schema,
       });
+    }
+    // A batch holds every change above the vector it was made for (`base`), so it counts on the
+    // receiver holding that much of every origin. A device that holds less — it restored a
+    // backup while the exchange was under way — lacks rows the batch's changes build on: a field
+    // edit under one origin on a row inserted under another, a chapter whose book it no longer
+    // has (which the orphan rule would then delete everywhere). Such a batch is left whole; the
+    // next exchange, made for what this device holds, brings it all. (A file carries no base: its
+    // changes follow the sender's earlier files, read in order.)
+    if (batch.base && !holdsBase(batch.base)) {
+      return { applied: 0, skipped: batch.changes.length, rows: 0, problems: [], tables: [], stale: true };
     }
     const stats = { applied: 0, skipped: 0, rows: 0, problems: [], tables: new Set() };
     db.transaction(() => {
@@ -363,6 +415,12 @@ export function openSync(db, options) {
       }
     });
     return { ...stats, tables: [...stats.tables] };
+  }
+
+  /** Whether this device holds at least `base` of every origin. */
+  function holdsBase(base) {
+    const held = vector();
+    return Object.entries(base).every(([origin, n]) => (held[origin] ?? 0) >= (n ?? 0));
   }
 
   /** The rows a delete of (tbl, k) will cascade to, depth first. */
@@ -600,7 +658,7 @@ export function openSync(db, options) {
     vector,
     changesSince,
     apply,
-    flush,
+    flush: () => flush(),
     recordPeer,
     peers: () => db.all("SELECT id, name, kind, last_sync AS lastSync, info FROM sync_peers ORDER BY last_sync DESC").map((p) => ({ ...p, info: p.info ? JSON.parse(p.info) : null })),
     setDeviceName(name) {
