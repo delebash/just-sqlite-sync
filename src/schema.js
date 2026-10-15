@@ -2,7 +2,9 @@
 // The engine's own tables, and the triggers that note each change to a synced table.
 //
 // sync_meta     key → value: library, device, device_name, seq (this device's change counter),
-//               triggers (a hash of the trigger SQL, to rebuild them when a schema changes)
+//               triggers (a hash of the trigger SQL, to rebuild them when a schema changes),
+//               restore / restore_at (a restore's mark and time), retired (the ids this device had
+//               before its restores, with the name it had and the restore's time)
 // sync_clock    one row per synced field: its newest stamp and where that change came from
 //               (origin device, origin sequence). col '-' is the row itself: alive 1, deleted 0.
 //               History-free: an older change to the same field is replaced, never kept.

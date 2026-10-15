@@ -34,7 +34,7 @@ tables — is this engine's model.
 ### 3.1 Tables the engine owns
 
 `sync_meta` (library id, device id and name, this device's sequence, the trigger hash, transport
-state, a restore's mark — §3.7) · `sync_clock` (per synced field: newest stamp, origin device, origin sequence; per row:
+state, a restore's mark and time, the ids this device had before its restores — §3.7) · `sync_clock` (per synced field: newest stamp, origin device, origin sequence; per row:
 `col = '-'`, alive 1 / deleted 0) · `sync_vector` (per other device, the highest sequence held) ·
 `sync_text` (per rich-text field: its Yjs state and the stamp it was brought up to) · `sync_peers`
 (devices and places synced with).
@@ -164,6 +164,17 @@ identity passed the same 300.
 The costs: one more origin in every vector per restore; the devices list shows the restored device
 as a new entry beside the old one; its old folder subfolder stays until removed.
 
+**The old id in this device's own list** (decided 2026-10-15, JustVoice's TASKS, "The build's 16
+questions", answer 5): the restored device reads its old id's folder subfolder like any other
+device's — that is how its newer work comes back — so the old id becomes an entry in its own
+devices list, under its own name. The restore marks the database with its time
+(`sync_meta.restore_at`, `src/restore.js`); when the old id retires, `sync_meta.retired` records
+it with the name the device had and that time (a list: one entry per restore), and `peers()`
+marks its entry `retired: { name, at }`. The kit's sync screen names it "‹name› (before the
+restore on ‹date›)". No Remove: the restored device reads that folder copy to get its newer work
+back, and a device still offline may not have read it yet. A device that never restored records
+nothing and its list is unchanged.
+
 The app layer (`src/app.js`) adds the rest: `restoreHooks` are the kit's `beforeCopy`, `afterCopy`
 and `afterTables`. Before the copy, while this device syncs (a cloud folder or a paired device is
 set), a backup from another sync library is refused (409, `restore-other-library`; decided
@@ -197,8 +208,9 @@ step, the mark makes the next start take the new id.
   texts (Yjs keeps both insertions).
 - A device whose clock is more than a day wrong can't sync until it's fixed (by design).
 - Large edits beyond the plain-text diff's limit merge coarsely.
-- A restored device is a new device (§3.7): the devices list shows it as a new entry, and its old
-  folder subfolder stays until removed.
+- A restored device is a new device (§3.7): the other devices' lists show it as a new entry beside
+  the old one, both under its name; in its own list the old one says it was this device before the
+  restore. Its old folder subfolder stays until removed.
 
 ## 6 · Tests
 

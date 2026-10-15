@@ -253,6 +253,26 @@ describe("the app layer: restoring a backup", () => {
     expect(one.appSync.get().device).not.toBe(before);
   });
 
+  it("the status route: the entry that was this computer before the restore says so, with the name it had", async () => {
+    const one = await makeApp("one", { file: true });
+    const folder = path.join(one.dir, "cloud");
+    const put = await one.server.request("/v1/sync/settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ deviceName: "Studio PC", autoMinutes: 0, folder }) });
+    expect(put.status).toBe(200);
+    one.write("INSERT INTO projects VALUES ('p1', 'The Lamp', NULL)");
+    expect(await one.appSync.runFolder()).toMatchObject({ ok: true });
+    const backup = backupOf(one, "backup");
+    const before = one.appSync.get().device;
+
+    restoreThrough(one, backup);
+    expect(await one.appSync.runFolder()).toMatchObject({ ok: true }); // reads its old folder copy
+    const status = await (await one.server.request("/v1/sync/status")).json();
+    expect(status.deviceName).toBe("Studio PC");
+    expect(status.peers).toEqual([
+      expect.objectContaining({ id: before, name: "Studio PC", kind: "folder", retired: { name: "Studio PC", at: expect.any(String) } }),
+    ]);
+    expect(Number.isFinite(Date.parse(status.peers[0].retired.at))).toBe(true);
+  });
+
   it("the server stopped right after the copy: the next start continues as a new device", async () => {
     const one = await makeApp("one", { file: true });
     one.write("INSERT INTO projects VALUES ('p1', 'The Lamp', NULL)");

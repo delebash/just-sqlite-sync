@@ -216,6 +216,45 @@ describe("restoring a backup", () => {
     expect(readdirSync(path.join(lib, a.sync.device)).filter((n) => n.startsWith("c-"))[0]).toBe("c-0000000001.sqs");
     expect(existsSync(path.join(lib, before))).toBe(true); // the old copy stays until removed
   });
+
+  it("the devices list says which entry was this device before a restore: the name it had and the restore's time", async () => {
+    const root = path.join(dir, "folder");
+    const a = device("a");
+    const b = device("b");
+    b.sync.joinLibrary(a.sync.library);
+    a.db.exec("INSERT INTO projects (id, title) VALUES ('p1', 'Book')");
+    const fa = () => folderSync(a.sync, nodeFolder(root));
+    const fb = () => folderSync(b.sync, nodeFolder(root));
+    await fa().sync();
+    await fb().sync();
+    const backup = backupOf(a, path.join(dir, "lbackup.db"));
+    const first = a.sync.device;
+
+    const t0 = Date.now();
+    restoreCopy(file("a"), backup);
+    const t1 = Date.now();
+    a.reopen();
+    await fa().sync(); // reads its old folder copy: the old id is an entry in its list
+    await fb().sync();
+    const old = a.sync.peers().find((p) => p.id === first);
+    expect(old).toMatchObject({ name: "a", kind: "folder", retired: { name: "a" } });
+    // the copy's time (the engine's clock here is a fake one, days earlier)
+    expect(Date.parse(old.retired.at)).toBeGreaterThanOrEqual(t0);
+    expect(Date.parse(old.retired.at)).toBeLessThanOrEqual(t1);
+    expect(a.sync.peers().find((p) => p.id === b.sync.device)).not.toHaveProperty("retired");
+    // a device that never restored is unchanged
+    expect(b.sync.peers().length).toBeGreaterThan(0);
+    for (const p of b.sync.peers()) expect(p).not.toHaveProperty("retired");
+
+    // a second restore: each old id keeps the name it had
+    a.sync.setDeviceName("Study laptop");
+    await fa().sync();
+    const second = a.sync.device;
+    restore(a, file("a"), backup);
+    await fa().sync();
+    const named = Object.fromEntries(a.sync.peers().filter((p) => p.retired).map((p) => [p.id, p.retired.name]));
+    expect(named).toEqual({ [first]: "a", [second]: "Study laptop" });
+  });
 });
 
 describe("restoring a backup: the stress run", () => {

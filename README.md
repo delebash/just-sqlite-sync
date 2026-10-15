@@ -124,7 +124,7 @@ way.
 | `sync.flush()` | Stamps the changes the triggers noted since the last flush. Call it after your saves (an `onResponse` hook on write routes is one place); it also runs before every read or apply. |
 | `sync.vector()` | This device's vector. |
 | `sync.library` / `sync.device` / `sync.deviceName` | Identity. `setDeviceName(name)`, `joinLibrary(id)`. |
-| `sync.peers()` | The devices and places this one has synced with, newest first. |
+| `sync.peers()` | The devices and places this one has synced with, newest first. An entry that was this device before a restore carries `retired: { name, at }` — the name it had and the restore's time (ISO) — so a devices list can say so. |
 | `syncWithPeer(sync, { url, token, join })` | Pull then push with another device's routes. |
 | `createSyncHandlers(sync)` | The three routes' bodies for any web framework (`hello`, `pull`, `push`). |
 | `folderSync(sync, store, { key, snapshotEvery, name, state })` | `.sync()`, `.pull()`, `.push()`, `.restore()` (rebuild this device from its own files), `.libraries()` (for "join the library in this folder"), `.removeDevice(id)`. `state` (default `"folder"`) keeps a second folder's progress apart (the phone's storage guard beside its cloud folder). `store` is `{ list, read, write, remove }`: `nodeFolder(dir)` on disk, `oneDriveAppFolder({ getToken })`, `dropboxAppFolder({ getToken })`. |
@@ -175,7 +175,10 @@ folder still carries the changes). JustWrite and JustVoice use it.
 `afterTables`): this device continues as a new device in sync — a new id in `sync-device.json`
 (`newIdentity(dataDir)`), the old one an origin holding what the backup held — so the other
 devices' newer work comes back and wins. It shows in the other devices' lists as a new entry beside
-the old one, and its old folder subfolder stays until removed. This device's own `sync` settings
+the old one, and its old folder subfolder stays until removed. In this device's own list the old
+id is an entry too (its folder copy is read like any other device's); `status`'s `peers` mark it
+`retired: { name, at }`, and the kit's sync screen names it "‹name› (before the restore on
+‹date›)". This device's own `sync` settings
 (the library key, the paired devices, the folder, the name) are kept, not the backup's, and so are
 its bearer tokens when the app gives `auth.set` (a device paired since keeps reaching it). While a
 cloud folder or a paired device is set, a backup from another sync library is refused (409,

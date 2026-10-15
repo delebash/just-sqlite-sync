@@ -42,7 +42,8 @@ export function beforeRestoreCopy(h) {
  * After the copy: the backup's stamps, rich-text states, vector and unstamped changes replace this
  * database's (none, for a backup from before sync — its rows are then recorded as older than any
  * change); the backup's own device's entry joins the vector (a device keeps its own sequence in
- * `sync_meta`, not in `sync_vector`); the database is marked restored; the triggers record again.
+ * `sync_meta`, not in `sync_vector`); the database is marked restored, with the restore's time; the
+ * triggers record again.
  * `sync_meta` stays this database's: its library, its device id, its name.
  */
 export function afterRestoreCopy(h, { src = "src" } = {}) {
@@ -64,6 +65,8 @@ export function afterRestoreCopy(h, { src = "src" } = {}) {
     ]);
   }
   h.run("INSERT OR REPLACE INTO main.sync_meta (key, value) VALUES ('restore', 'copied')");
+  // when: the devices list names the id this device had until now by the restore's date (engine.js)
+  h.run("INSERT OR REPLACE INTO main.sync_meta (key, value) VALUES ('restore_at', ?)", [new Date().toISOString()]);
   if (hasTable(h, "main", "sync_flag")) h.run("UPDATE main.sync_flag SET applying = 0 WHERE id = 1");
 }
 

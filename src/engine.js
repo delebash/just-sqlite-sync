@@ -43,6 +43,15 @@ export function openSync(db, options) {
   // --- meta ---------------------------------------------------------------------------------
   const getMeta = (key) => db.get("SELECT value FROM sync_meta WHERE key = ?", [key])?.value;
   const setMeta = (key, value) => db.run("INSERT OR REPLACE INTO sync_meta (key, value) VALUES (?, ?)", [key, value]);
+  /** The ids this device had before its restores: [{ id, name, at }] — the name it had, the restore's time. */
+  const retiredIds = () => {
+    try {
+      const list = JSON.parse(getMeta("retired") ?? "[]");
+      return Array.isArray(list) ? list : [];
+    } catch {
+      return [];
+    }
+  };
 
   let library = getMeta("library");
   if (!library) {
@@ -74,6 +83,12 @@ export function openSync(db, options) {
         // the transports' progress was the old id's: the new one writes its own folder files from
         // the first, and reads every other device's (the old id's too) again
         db.run("DELETE FROM sync_meta WHERE key LIKE 'state:%'");
+        // the devices list shows the old id's entry (its folder copy, read again) as this device
+        // before the restore: the name it had and the restore's time (the copy's — restore.js;
+        // now, when a copy left none)
+        const at = getMeta("restore_at") ?? new Date((now ?? Date.now)()).toISOString();
+        setMeta("retired", JSON.stringify([...retiredIds(), { id: device, name: getMeta("device_name") ?? null, at }]));
+        db.run("DELETE FROM sync_meta WHERE key = 'restore_at'");
       }
       if (device) {
         db.run("INSERT INTO sync_vector (origin, seq) VALUES (?, ?) ON CONFLICT(origin) DO UPDATE SET seq = max(seq, excluded.seq)", [
@@ -673,7 +688,17 @@ export function openSync(db, options) {
     apply,
     flush: () => flush(),
     recordPeer,
-    peers: () => db.all("SELECT id, name, kind, last_sync AS lastSync, info FROM sync_peers ORDER BY last_sync DESC").map((p) => ({ ...p, info: p.info ? JSON.parse(p.info) : null })),
+    /** The devices and places this one has synced with, newest first. An entry that was this
+     * device before a restore carries `retired: { name, at }` — the name it had, the restore's time. */
+    peers: () => {
+      const mine = new Map(retiredIds().map((r) => [r.id, r]));
+      return db.all("SELECT id, name, kind, last_sync AS lastSync, info FROM sync_peers ORDER BY last_sync DESC").map((p) => {
+        const entry = { ...p, info: p.info ? JSON.parse(p.info) : null };
+        const was = mine.get(p.id);
+        if (was) entry.retired = { name: was.name ?? null, at: was.at ?? null };
+        return entry;
+      });
+    },
     setDeviceName(name) {
       setMeta("device_name", name);
     },
