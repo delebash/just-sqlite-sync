@@ -148,7 +148,7 @@ const appSync = createAppSync({
   tables: () => ({ projects: {}, chapters: {} }),          // what syncs (openSync `tables`)
   database: () => betterSqlite3Adapter(db),
   settings: { read, write },        // where the app keeps the `sync` section (an object)
-  auth: { tokens, add },            // the app's bearer tokens — pairing adds one per device
+  auth: { tokens, add, set },       // the app's bearer tokens — pairing adds one per device; set: a restore puts this device's back
   units: { scope, name, extension: "mysync", noun: "projects" }, // what a by-hand file holds
   errors,                           // optional: how a 400 / 409 / 503 reaches the app's client
   readJson,                         // optional: the app's JSON body reader (default plain JSON)
@@ -176,7 +176,8 @@ folder still carries the changes). JustWrite and JustVoice use it.
 (`newIdentity(dataDir)`), the old one an origin holding what the backup held — so the other
 devices' newer work comes back and wins. It shows in the other devices' lists as a new entry beside
 the old one, and its old folder subfolder stays until removed. This device's own `sync` settings
-(the library key, the paired devices, the folder, the name) are kept, not the backup's. While a
+(the library key, the paired devices, the folder, the name) are kept, not the backup's, and so are
+its bearer tokens when the app gives `auth.set` (a device paired since keeps reaching it). While a
 cloud folder or a paired device is set, a backup from another sync library is refused (409,
 `restore-other-library`); a device that isn't syncing takes any backup and stays in its own
 library. If the server stops between the copy and the new id, the next `open` takes it

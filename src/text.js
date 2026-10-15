@@ -124,12 +124,11 @@ export function plainTextAdapter(name = "text") {
 }
 
 /**
- * The engine's Yjs operations for one adapter. `deviceClientId` names this device's edits.
- * `Y` is the Yjs module to make documents with — the app's own when its adapter uses another Yjs
- * library (y-prosemirror, y-tiptap): two copies of Yjs in one process fail each other's
- * instanceof checks (openSync's `yjs` option).
+ * The engine's Yjs operations for one adapter. `Y` is the Yjs module to make documents with — the
+ * app's own when its adapter uses another Yjs library (y-prosemirror, y-tiptap): two copies of Yjs
+ * in one process fail each other's instanceof checks (openSync's `yjs` option).
  */
-export function textOps(adapter, deviceClientId, Y = defaultY) {
+export function textOps(adapter, Y = defaultY) {
   const docFrom = (state) => {
     const doc = new Y.Doc();
     if (state && state.length) Y.applyUpdate(doc, state);
@@ -140,11 +139,12 @@ export function textOps(adapter, deviceClientId, Y = defaultY) {
      * The Yjs state after the column took `value`. With no earlier state the document starts
      * from a client id derived from the content itself, so two devices that hold the same
      * initial text (a bundled sample, a copied database) produce the same state and merging
-     * them changes nothing.
+     * them changes nothing. Later edits are `clientId`'s — this device's, for this life of the
+     * row (the engine's textClientId).
      */
-    fromValue(prevState, value, seedKey) {
+    fromValue(prevState, value, seedKey, clientId) {
       const doc = docFrom(prevState);
-      doc.clientID = prevState && prevState.length ? deviceClientId : hash52(`${seedKey}\u0000${value ?? ""}`);
+      doc.clientID = prevState && prevState.length ? clientId : hash52(`${seedKey}\u0000${value ?? ""}`);
       adapter.apply(doc, value);
       return Y.encodeStateAsUpdate(doc);
     },

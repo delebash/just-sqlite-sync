@@ -243,4 +243,15 @@ describe("restoring a backup: the stress run", () => {
     }
     expect(restores).toBeGreaterThan(500);
   }, 600_000);
+
+  it("the run that once ended different: a parent's delete over a child brought back (seed 526)", () => {
+    const { devs } = runWithRestores(526, 60, mkdtempSync(path.join(dir, "run-")));
+    try {
+      const [da, db, dc] = devs.map((d) => dump(d.db));
+      expect(db).toEqual(da);
+      expect(dc).toEqual(da);
+    } finally {
+      for (const d of devs) d.raw.close();
+    }
+  });
 });

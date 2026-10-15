@@ -99,7 +99,13 @@ export function openSync(db, options) {
   if (getMeta("seq") == null) setMeta("seq", 0); // the triggers UPDATE this row
   if (options.deviceName && getMeta("device_name") !== options.deviceName) setMeta("device_name", options.deviceName);
   let seq = Number(getMeta("seq") ?? 0);
-  const deviceClientId = hash52(`device:${device}`);
+  // This device's Yjs client id for a rich-text field: its id and the row's insert mark. A row
+  // deleted and made again is a new document, where a client's edits start again from clock 0 —
+  // under one id for every life of the row, they'd take the ids of its edits to the old life, and
+  // a device still holding that life (it never applied the delete: the new insert won; a restored
+  // backup) would skip them as known. Each life gets its own ids. (A row with no mark: the
+  // oldest stamp.)
+  const textClientId = (born) => hash52(`device:${device}\u0000${born ?? formatStamp(0, 0, device)}`);
 
   const clock = createClock(device, { now, maxDriftMs });
   clock.seed(db.get("SELECT max(stamp) AS s FROM sync_clock")?.s);
@@ -122,7 +128,7 @@ export function openSync(db, options) {
       if (!adapter || typeof adapter.apply !== "function" || typeof adapter.render !== "function") {
         throw new SyncError(BAD_CONFIG, `text column ${name}.${col} needs an adapter with apply(doc, value) and render(doc)`);
       }
-      text[col] = textOps(adapter, deviceClientId, options.yjs);
+      text[col] = textOps(adapter, options.yjs);
     }
     const where = pk.map((c) => `${quoteIdent(c)} = ?`).join(" AND ");
     info[name] = { name, pk, data, text, where, Q: quoteIdent(name), dataSet: new Set(data) };
@@ -257,15 +263,16 @@ export function openSync(db, options) {
     for (const t of Object.values(info)) {
       for (const [col, ops] of Object.entries(t.text)) {
         const dirty = db.all(
-          `SELECT c.pk AS k, c.stamp AS stamp, x.state AS state FROM sync_clock c
+          `SELECT c.pk AS k, c.stamp AS stamp, x.state AS state, m.stamp AS born FROM sync_clock c
              LEFT JOIN sync_text x ON x.tbl = c.tbl AND x.pk = c.pk AND x.col = c.col
+             LEFT JOIN sync_clock m ON m.tbl = c.tbl AND m.pk = c.pk AND m.col = '-'
             WHERE c.tbl = ? AND c.col = ? AND (x.stamp IS NULL OR x.stamp <> c.stamp)`,
           [t.name, col],
         );
-        for (const { k, stamp, state } of dirty) {
+        for (const { k, stamp, state, born } of dirty) {
           const row = readRow(t, k, [col]);
           if (!row) continue;
-          const next = ops.fromValue(state ? asBytes(state) : null, row[col], `${t.name}\u0000${k}\u0000${col}`);
+          const next = ops.fromValue(state ? asBytes(state) : null, row[col], `${t.name}\u0000${k}\u0000${col}`, textClientId(born));
           setText(t.name, k, col, next, stamp);
         }
       }
@@ -399,7 +406,11 @@ export function openSync(db, options) {
           const prev = g.latest.get(ch.c);
           if (!prev || ch.s > prev.s) g.latest.set(ch.c, ch);
         }
-        const incomingDelete = (tbl, k) => groups.get(`${tbl}\u0000${k}`)?.latest.get("-")?.v === 0;
+        // a delete of (tbl, k) in this batch that wins here (newer than this device's own mark)
+        const incomingDelete = (tbl, k, localStamp) => {
+          const m = groups.get(`${tbl}\u0000${k}`)?.latest.get("-");
+          return m?.v === 0 && (localStamp == null || m.s > localStamp);
+        };
         for (const g of groups.values()) applyRow(g, stats, incomingDelete);
         if (fksOn()) removeOrphans(stats);
         flush(); // the orphans this device removed, as its own changes
@@ -506,9 +517,11 @@ export function openSync(db, options) {
         const doomed = fksOn() ? cascadeOf(tbl, k) : [];
         db.run(`DELETE FROM ${t.Q} WHERE ${t.where}`, pkValues(k));
         for (const d of doomed) {
-          const m = db.get("SELECT alive FROM sync_clock WHERE tbl = ? AND pk = ? AND col = '-'", [d.tbl, d.k]);
+          const m = db.get("SELECT alive, stamp FROM sync_clock WHERE tbl = ? AND pk = ? AND col = '-'", [d.tbl, d.k]);
           if (m && m.alive === 0) continue;
-          if (incomingDelete(d.tbl, d.k)) continue;
+          // the batch deletes it too — when that delete wins here; an older one (this device
+          // brought the row back since) loses, so the cascade's delete is this device's to record
+          if (incomingDelete(d.tbl, d.k, m?.stamp)) continue;
           recordDelete(d.tbl, d.k);
           stats.tables.add(d.tbl);
         }

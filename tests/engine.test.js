@@ -4,8 +4,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { describe, expect, it } from "vitest";
-import { LIBRARY_MISMATCH, SCHEMA_TOO_NEW, CLOCK_DRIFT } from "../src/index.js";
-import { dump, exchange, makeDevice, setNow } from "./helpers.js";
+import { LIBRARY_MISMATCH, SCHEMA_TOO_NEW, CLOCK_DRIFT, openSync } from "../src/index.js";
+import { openSync as openSyncBefore } from "./fixtures/engine-35dc1d7/engine.js";
+import { TABLES, dump, exchange, makeDevice, now, setNow } from "./helpers.js";
+import { settle } from "./sim.js";
 
 function seed(dev) {
   dev.db.exec(`
@@ -226,5 +228,82 @@ describe("devices", () => {
     a.db.exec("UPDATE chapters SET title = 'after seeing it' WHERE id = 'c1'");
     exchange(a, b);
     expect(b.db.prepare("SELECT title FROM chapters WHERE id = 'c1'").get().title).toBe("after seeing it");
+  });
+});
+
+// Found by the restore stress run (JustVoice's P16, 2026-10-15), each also reachable without a
+// restore: the seeds that showed them run in convergence.test.js and restore-inflight.test.js.
+describe("merging: what the longer random runs found", () => {
+  const titleOf = (d, id) => d.db.prepare("SELECT title FROM chapters WHERE id = ?").get(id)?.title;
+  const bodyOf = (d) => d.db.prepare("SELECT body FROM scenes WHERE id = 's1'").get()?.body;
+  const settled = (devs) => {
+    settle(devs);
+    for (const d of devs) expect(dump(d.db)).toEqual(dump(devs[0].db));
+    for (const x of devs) for (const y of devs) if (x !== y) expect(x.sync.changesSince(y.sync.vector()).changes).toEqual([]);
+  };
+
+  it("a parent's delete takes a child this device brought back after an older delete of that child", () => {
+    const [a, b, c] = ["a", "b", "c"].map((n) => makeDevice(n));
+    a.db.exec("INSERT INTO projects VALUES ('p1', 'Book', NULL); INSERT INTO chapters VALUES ('p1', 'c1', 0, 'One');");
+    for (const d of [b, c]) d.sync.apply(a.sync.changesSince({}), { join: true });
+    a.db.exec("DELETE FROM chapters WHERE id = 'c1'");
+    exchange(a, c); // c has the chapter's delete; b hasn't
+    b.db.exec("INSERT OR REPLACE INTO chapters VALUES ('p1', 'c1', 0, 'One again')"); // newer than that delete
+    c.db.exec("DELETE FROM projects WHERE id = 'p1'"); // newer still: the book goes, and its chapters
+    // b gets both deletes in one batch: the chapter's (older than b's insert) and the book's — the
+    // book's cascade takes the chapter, and that delete is b's to record
+    exchange(b, c);
+    expect(titleOf(b, "c1")).toBeUndefined();
+    // gone, and recorded as gone — a row whose mark still said alive would come back on any device
+    // that holds an older copy of it (a restored backup did, in the run that found this)
+    const mark = (d) => d.raw.prepare("SELECT alive FROM sync_clock WHERE tbl = 'chapters' AND pk = '[\"p1\",\"c1\"]' AND col = '-'").get()?.alive;
+    expect(mark(b)).toBe(0);
+    settled([a, b, c]);
+    for (const d of [a, b, c]) expect(mark(d)).toBe(0);
+  });
+
+  it("a row deleted and made again: edits to its new life are never taken for edits to its old one", () => {
+    const [a, b, c] = ["a", "b", "c"].map((n) => makeDevice(n));
+    a.db.exec("INSERT INTO projects VALUES ('p1', 'Book', NULL); INSERT INTO scenes VALUES ('p1', 's1', 'c1', 0, 'Scene', 'the lamp');");
+    for (const d of [b, c]) d.sync.apply(a.sync.changesSince({}), { join: true });
+    a.db.exec("UPDATE scenes SET body = 'the lamp was lit' WHERE id = 's1'"); // a's edits to the first life
+    exchange(a, b);
+    exchange(a, c);
+    b.db.exec("DELETE FROM scenes WHERE id = 's1'");
+    exchange(a, b); // c never hears of the delete…
+    b.db.exec("INSERT INTO scenes VALUES ('p1', 's1', 'c1', 0, 'Scene', 'a door')"); // …and the second life wins over it
+    exchange(a, b);
+    a.db.exec("UPDATE scenes SET body = 'a red door' WHERE id = 's1'"); // a's first edits to the second life
+    exchange(a, c); // c merges the second life into the first, which it still holds
+    settled([a, b, c]);
+    expect(bodyOf(a)).toContain("a red door");
+  });
+
+  it("a device still on the previous engine (one Yjs id per device) and an upgraded one merge, nothing lost or doubled", () => {
+    const a = makeDevice("a", { engine: openSyncBefore });
+    const b = makeDevice("b", { engine: openSyncBefore });
+    a.db.exec("INSERT INTO projects VALUES ('p1', 'Book', NULL); INSERT INTO scenes VALUES ('p1', 's1', 'c1', 0, 'Scene', 'the lamp was lit');");
+    b.sync.apply(a.sync.changesSince({}), { join: true });
+    a.db.exec("UPDATE scenes SET body = 'the brass lamp was lit' WHERE id = 's1'");
+    b.db.exec("UPDATE scenes SET body = 'the lamp was lit at night' WHERE id = 's1'");
+    exchange(a, b);
+    expect([bodyOf(a), bodyOf(b)]).toEqual(["the brass lamp was lit at night", "the brass lamp was lit at night"]);
+
+    // a takes the new engine on the same database; b stays on the previous one for an exchange
+    a.sync = openSync(a.adapter, { app: "testapp", tables: TABLES, deviceId: "dev-a", deviceName: "a", now });
+    a.db.exec("UPDATE scenes SET body = 'the old brass lamp was lit at night' WHERE id = 's1'");
+    b.db.exec("UPDATE scenes SET body = 'the brass lamp was lit at night, again' WHERE id = 's1'");
+    exchange(a, b);
+    expect([bodyOf(a), bodyOf(b)]).toEqual(["the old brass lamp was lit at night, again", "the old brass lamp was lit at night, again"]);
+    a.db.exec("UPDATE scenes SET body = 'the old brass lamp was lit at night, once again' WHERE id = 's1'");
+    exchange(a, b);
+    expect(bodyOf(b)).toBe("the old brass lamp was lit at night, once again");
+
+    b.sync = openSync(b.adapter, { app: "testapp", tables: TABLES, deviceId: "dev-b", deviceName: "b", now });
+    b.db.exec("UPDATE scenes SET body = 'the old brass lamp was lit at night, once again.' WHERE id = 's1'");
+    a.db.exec("UPDATE scenes SET body = 'An old brass lamp was lit at night, once again' WHERE id = 's1'");
+    exchange(a, b);
+    expect([bodyOf(a), bodyOf(b)]).toEqual(["An old brass lamp was lit at night, once again.", "An old brass lamp was lit at night, once again."]);
+    settled([a, b]);
   });
 });

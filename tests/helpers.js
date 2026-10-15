@@ -76,14 +76,14 @@ function flushingDb(db, getSync) {
   });
 }
 
-export function makeDevice(name, { deviceId, file = ":memory:", schemaVersion = 1, raw, tables = TABLES } = {}) {
+export function makeDevice(name, { deviceId, file = ":memory:", schemaVersion = 1, raw, tables = TABLES, engine = openSync } = {}) {
   const base = raw ?? new Database(file);
   if (!raw) {
     base.pragma("foreign_keys = ON");
     base.exec(SCHEMA);
   }
   const adapter = betterSqlite3Adapter(base);
-  const open = (id) => openSync(adapter, { app: "testapp", schemaVersion, tables, deviceId: id, deviceName: name, now });
+  const open = (id) => engine(adapter, { app: "testapp", schemaVersion, tables, deviceId: id, deviceName: name, now });
   const dev = { name, raw: base, adapter, sync: open(deviceId ?? `dev-${name}`) };
   dev.db = flushingDb(base, () => dev.sync);
   /** Open sync again under a new device id — what the app layer does after a restore. */

@@ -78,7 +78,12 @@ failure changes nothing. **Foreign keys:** applying a parent's delete cascades h
 only this device had are deleted with a recorded delete (other devices drop them as well); a child
 whose parent is gone after a batch (added on one device while the parent was deleted on another) is
 deleted — or nulled, for `ON DELETE SET NULL` — and recorded. The parent's delete wins, as the
-cascade would have decided.
+cascade would have decided. A child the cascade takes is left unrecorded only when the same batch
+deletes it too *and that delete wins here*: a batch can carry an older delete of a child this
+device has since brought back (the newer insert wins over it), and the parent's newer delete then
+takes the row — recorded as this device's delete, or the row would be gone while its mark said
+alive, and come back wherever an older copy of it lives (a restored backup). Found by a longer
+random run, 2026-10-15 (`tests/engine.test.js`; seeds 128, 677, 1128, 1553 at 120 steps).
 
 ### 3.5 Rich text
 
@@ -92,7 +97,15 @@ is the Yjs state; receiving merges it and renders the column. Rules that keep it
 - a document's first state is made under a client id derived from its content, so two devices
   that hold the same initial text (a bundled sample, a copied database) produce identical states
   that merge to one;
-- later edits use a client id derived from the device id.
+- later edits use a client id derived from the device id and the row's insert mark (its `-`
+  stamp; for a row with none, the oldest stamp). A row deleted and made again is a new document,
+  where a client's edits start again from clock 0: under one id for every life of the row they
+  would take the ids of its edits to the old life, and a device still holding that life — it never
+  applied the delete because the new insert won, or a restored backup brought it back — would
+  skip them as already known. Each life gets its own ids (2026-10-15; `tests/engine.test.js`,
+  restore stress seed 1236). Edits made by an engine from before this keep their ids (one per
+  device): a client id is only ever new, never reused, so old and new ids merge without losing or
+  doubling an edit (the mixed-version test runs the engine as of 35dc1d7 against this one).
 `plainTextAdapter()` diffs characters with Myers' algorithm (beyond 2,000 changed characters it
 replaces the changed middle whole — still correct, only coarser). An HTML editor brings its own
 adapter (for ProseMirror/TipTap: y-prosemirror's `updateYFragment` against the editor's schema).
@@ -157,7 +170,8 @@ set), a backup from another sync library is refused (409, `restore-other-library
 2026-10-15) — every fresh database starts its own library, so a device that isn't syncing takes
 any backup, and stays in its own library. This device's `sync` settings (the library key, the
 paired devices, the folder, the name) are read before the copy and written back after it: the
-backup's are older, or another computer's. After the copy, sync reopens under a new id
+backup's are older, or another computer's. So are its bearer tokens, the ones its paired devices
+use to reach it, when the app gives `auth.set`. After the copy, sync reopens under a new id
 (`newIdentity`, `sync-device.json`); a sync run still holding the engine from before stops with
 `reopened` instead of writing as the old device. If the server stops between the copy and that
 step, the mark makes the next start take the new id.

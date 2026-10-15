@@ -8,21 +8,28 @@ import { describe, expect, it } from "vitest";
 import { dump } from "./helpers.js";
 import { runOnce } from "./sim.js";
 
+function expectConverged(seed, steps) {
+  const devs = runOnce(seed, steps);
+  const [da, db, dc] = devs.map((d) => dump(d.db));
+  try {
+    expect(db).toEqual(da);
+    expect(dc).toEqual(da);
+    for (const d of devs) expect(d.db.pragma("foreign_key_check")).toEqual([]);
+    // and nothing left to send between any two of them
+    for (const x of devs) for (const y of devs) if (x !== y) expect(x.sync.changesSince(y.sync.vector()).changes).toEqual([]);
+  } catch (err) {
+    err.message = `seed ${seed}: ${err.message}`;
+    throw err;
+  }
+}
+
 describe("convergence", () => {
   it("three devices end identical, whatever they did and however they synced (300 seeded runs)", () => {
-    for (let seed = 1; seed <= 300; seed++) {
-      const devs = runOnce(seed, 40);
-      const [da, db, dc] = devs.map((d) => dump(d.db));
-      try {
-        expect(db).toEqual(da);
-        expect(dc).toEqual(da);
-        for (const d of devs) expect(d.db.pragma("foreign_key_check")).toEqual([]);
-        // and nothing left to send between any two of them
-        for (const x of devs) for (const y of devs) if (x !== y) expect(x.sync.changesSince(y.sync.vector()).changes).toEqual([]);
-      } catch (err) {
-        err.message = `seed ${seed}: ${err.message}`;
-        throw err;
-      }
-    }
+    for (let seed = 1; seed <= 300; seed++) expectConverged(seed, 40);
+  });
+
+  it("the longer runs that once ended different (120 steps): a parent's delete over a child brought back", () => {
+    // engine.test.js "a parent's delete takes a child this device brought back…" (2026-10-15)
+    for (const seed of [128, 677, 1128, 1553]) expectConverged(seed, 120);
   });
 });

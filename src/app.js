@@ -116,7 +116,9 @@ export function reachableUrls(port, prefix = "/v1/sync") {
  * @param {() => object} opts.tables the engine's table config (openSync `tables`)
  * @param {() => object} opts.database the engine's adapter on the app's database (betterSqlite3Adapter…)
  * @param {{ read(): object|null, write(cfg: object): void }} opts.settings where the app keeps the `sync` section
- * @param {{ tokens(): string[], add(token: string): void }} opts.auth the app's bearer tokens
+ * @param {{ tokens(): string[], add(token: string): void, set?(tokens: string[]): void }} opts.auth the
+ *   app's bearer tokens; `set` replaces them — after a restore this device's own go back (the backup's
+ *   are older: a device paired since would be locked out, one removed since let back in)
  * @param {{ scope(ids: string[]): (table: string, pk: unknown[]) => boolean, name(ids: string[]): string, extension: string, noun?: string }} opts.units
  *   what a by-hand export holds: the units (books, projects…) the user picked; `noun` names them
  *   in messages ("books")
@@ -263,6 +265,7 @@ export function createAppSync(opts) {
   // ── restoring a backup (the kit's data router: beforeCopy, afterCopy, afterTables) ───────
 
   let kept = null; // this device's `sync` settings, read before the copy, written back after
+  let keptTokens = null; // and its bearer tokens (the paired devices'), when the app can set them
 
   /**
    * Before the copy, inside the restore's transaction (`h` its connection, the backup attached as
@@ -286,6 +289,14 @@ export function createAppSync(opts) {
       }
     }
     kept = cfg;
+    keptTokens = null;
+    if (typeof auth.set === "function") {
+      try {
+        keptTokens = [...(auth.tokens() ?? [])];
+      } catch (e) {
+        log.warning(`bearer tokens unreadable before the restore: ${e?.message ?? e}`);
+      }
+    }
     beforeRestoreCopy(h);
   }
 
@@ -297,7 +308,7 @@ export function createAppSync(opts) {
   /**
    * Right after the copy commits: this device's own `sync` settings go back (the library key, the
    * paired devices, the folder, the device name — the backup's are older, or another computer's),
-   * and sync reopens as a new device. The id it had stays an origin holding what the backup held of
+   * with its bearer tokens (`auth.set`), and sync reopens as a new device. The id it had stays an origin holding what the backup held of
    * it; the other devices' newer work comes back on the next sync. `dataDir` defaults to the one
    * sync was opened with.
    */
@@ -312,6 +323,15 @@ export function createAppSync(opts) {
         writeSettings(cfg);
       } catch (e) {
         log.warning(`sync settings couldn't be put back after the restore: ${e?.message ?? e}`);
+      }
+    }
+    if (keptTokens) {
+      const tokens = keptTokens;
+      keptTokens = null;
+      try {
+        auth.set(tokens);
+      } catch (e) {
+        log.warning(`bearer tokens couldn't be put back after the restore: ${e?.message ?? e}`);
       }
     }
     return dir == null ? null : open(dir);

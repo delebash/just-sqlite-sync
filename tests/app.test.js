@@ -40,7 +40,11 @@ async function makeApp(name, { file = false } = {}) {
     tables: () => TABLES,
     database: () => betterSqlite3Adapter(db),
     settings: { read: () => JSON.parse(getRow("sync") ?? "null"), write: (cfg) => putRow("sync", JSON.stringify(cfg)) },
-    auth: { tokens: () => JSON.parse(getRow("tokens") ?? "[]"), add: (t) => putRow("tokens", JSON.stringify([...JSON.parse(getRow("tokens") ?? "[]"), t])) },
+    auth: {
+      tokens: () => JSON.parse(getRow("tokens") ?? "[]"),
+      add: (t) => putRow("tokens", JSON.stringify([...JSON.parse(getRow("tokens") ?? "[]"), t])),
+      set: (tokens) => putRow("tokens", JSON.stringify(tokens)),
+    },
     units: { scope: (ids) => (t, pk) => t !== "images" && ids.includes(pk[0]), name: (ids) => db.prepare("SELECT title FROM projects WHERE id = ?").get(ids[0])?.title, extension: "tsync" },
     log: { warning() {} },
   });
@@ -195,8 +199,10 @@ describe("the app layer: restoring a backup", () => {
     const one = await makeApp("one", { file: true });
     one.write("INSERT INTO projects VALUES ('p1', 'The Lamp', NULL)");
     one.putRow("sync", JSON.stringify({ deviceName: "Before the backup", autoMinutes: 0, key: "old-key" }));
+    one.putRow("tokens", JSON.stringify(["removed-since"]));
     const backup = backupOf(one, "backup");
     one.putRow("sync", JSON.stringify(LIVE));
+    one.putRow("tokens", JSON.stringify(["paired-since"]));
     one.write("UPDATE projects SET title = 'The Brass Lamp' WHERE id = 'p1'");
     const old = one.appSync.get();
     const before = old.device;
@@ -210,6 +216,7 @@ describe("the app layer: restoring a backup", () => {
     expect(now.vector()[before]).toBeGreaterThan(0); // the id it had: an origin, at what the backup held
     expect(now.library).toBe(library);
     expect(one.appSync.readSettings()).toMatchObject(LIVE); // not the backup's
+    expect(JSON.parse(one.db.prepare("SELECT value FROM settings WHERE key = 'tokens'").get().value)).toEqual(["paired-since"]);
     expect(restorePending(betterSqlite3Adapter(one.db))).toBe(false);
     // a sync run still holding the engine from before stops instead of writing as the old device
     expect(() => old.vector()).toThrow(expect.objectContaining({ code: REOPENED }));

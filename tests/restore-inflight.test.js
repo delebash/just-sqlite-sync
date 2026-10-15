@@ -46,4 +46,23 @@ describe("restoring a backup: the stress run, with exchanges under way", () => {
     }
     expect(restores).toBeGreaterThan(500);
   }, 600_000);
+
+  it("the runs that once ended different: a parent's delete over a child brought back, a row's text across its lives", () => {
+    // engine.test.js "merging: what the longer random runs found" (2026-10-15)
+    for (const seed of [364, 526, 1236, 2162]) {
+      const runDir = mkdtempSync(path.join(dir, "run-"));
+      const { devs } = runWithRestores(seed, 60, runDir, { adversarial: true });
+      try {
+        const [da, db, dc] = devs.map((d) => dump(d.db));
+        expect(db).toEqual(da);
+        expect(dc).toEqual(da);
+        for (const x of devs) for (const y of devs) if (x !== y) expect(x.sync.changesSince(y.sync.vector()).changes).toEqual([]);
+      } catch (err) {
+        err.message = `seed ${seed}: ${err.message}`;
+        throw err;
+      } finally {
+        for (const d of devs) d.raw.close();
+      }
+    }
+  });
 });
