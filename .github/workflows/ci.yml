@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: MIT
 name: CI
+
+# Run by hand only (Actions → CI → Run workflow), like JustVoice's — the user, 2026-10-17: "it
+# should be onluy run by hand", and "your rec on all go" on doing the same here.
 on:
-  push:
-    branches: [main]
-  pull_request:
+  workflow_dispatch:
 jobs:
   test:
     strategy:
