@@ -15,7 +15,7 @@ This file holds what this repo's code depends on.
   the override rule.
 - **A trigger that calls a function registered from JavaScript fails on every other connection**
   ("no such function") — and the family kit's restore opens its own connection to rewrite the
-  tables (`just-llm-runner/server/src/platform/data_api.js`, `POST /v1/data/restore`: `openDatabase`
+  tables (`just-core/packages/core/src/platform/data_api.js`, `POST /v1/data/restore`: `openDatabase`
   + `ATTACH` + `DELETE`/`INSERT`). So the triggers are pure SQL and stamping happens in `flush()`;
   `tests/engine.test.js` "a write from another connection is noted too" checks it (2026-10-08).
 - **Dropping a table drops its triggers** (SQLite) — the kit's data reset drops and re-creates

@@ -13,7 +13,7 @@ WHY:    the apps' servers move to Hono; `/app`'s routes are registered on them.
 NOT:    the kit's item.
 BUILT:  2026-10-09 — `src/transports/hono.js` (`registerSyncRoutes(app, …)` on the app's own Hono),
         `appSync.routes(app)`, `createAppSync({ readJson })`, the `./hono` export (47/47). The plan:
-        `../just-llm-runner/docs/plans/2026-10-09-hono-standard.md` §9.
+        `../just-core/docs/plans/2026-10-09-hono-standard.md` §9.
 OPEN:   nothing.
 GO:     given 2026-10-09 (the kit's item).
 
