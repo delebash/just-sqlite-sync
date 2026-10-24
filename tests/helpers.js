@@ -4,6 +4,7 @@
 // column that merges through Yjs), and sync opened on it.
 
 import Database from "better-sqlite3";
+import * as Y from "yjs";
 import { afterRestoreCopy, beforeRestoreCopy, betterSqlite3Adapter, openSync, plainTextAdapter } from "../src/index.js";
 
 export const SCHEMA = `
@@ -83,7 +84,7 @@ export function makeDevice(name, { deviceId, file = ":memory:", schemaVersion = 
     base.exec(SCHEMA);
   }
   const adapter = betterSqlite3Adapter(base);
-  const open = (id) => engine(adapter, { app: "testapp", schemaVersion, tables, deviceId: id, deviceName: name, now });
+  const open = (id) => engine(adapter, { app: "testapp", schemaVersion, tables, deviceId: id, deviceName: name, now, yjs: Y });
   const dev = { name, raw: base, adapter, sync: open(deviceId ?? `dev-${name}`) };
   dev.db = flushingDb(base, () => dev.sync);
   /** Open sync again under a new device id — what the app layer does after a restore. */
@@ -183,3 +184,6 @@ export function rng(seed) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
+
+/** The Yjs module tests pass as the app does (openSync's `yjs`): the package imports none of its own. */
+export { Y };

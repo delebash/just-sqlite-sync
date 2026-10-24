@@ -11,7 +11,7 @@ import { Hono } from "hono";
 import { afterEach, describe, expect, it } from "vitest";
 import { createAppSync } from "../src/app.js";
 import { REOPENED, RESTORE_OTHER_LIBRARY, betterSqlite3Adapter, restorePending } from "../src/index.js";
-import { APP_TABLES, SCHEMA, TABLES, fileDatabase, restoreCopy } from "./helpers.js";
+import { APP_TABLES, SCHEMA, TABLES, Y, fileDatabase, restoreCopy } from "./helpers.js";
 
 const cleanup = [];
 afterEach(async () => {
@@ -38,6 +38,7 @@ async function makeApp(name, { file = false } = {}) {
     appName: "Test App",
     schemaVersion: 1,
     tables: () => TABLES,
+    yjs: Y,
     database: () => betterSqlite3Adapter(db),
     settings: { read: () => JSON.parse(getRow("sync") ?? "null"), write: (cfg) => putRow("sync", JSON.stringify(cfg)) },
     auth: {
@@ -158,6 +159,7 @@ describe("the app layer", () => {
         appName: "Test App",
         schemaVersion: 1,
         tables: () => TABLES,
+        yjs: Y,
         database: () => betterSqlite3Adapter(db),
         settings: { read: () => cfg, write: (c) => (cfg = c) },
         auth: { tokens: () => [], add() {} },

@@ -22,14 +22,15 @@
   "allowScripts": {
     "better-sqlite3": true
   },
-  "dependencies": {
-    "yjs": "^13.6.33"
-  },
   "peerDependencies": {
-    "hono": "^4.13.13"
+    "hono": "^4.13.13",
+    "yjs": "^13.6.33"
   },
   "peerDependenciesMeta": {
     "hono": {
+      "optional": true
+    },
+    "yjs": {
       "optional": true
     }
   },
@@ -39,6 +40,7 @@
     "better-sqlite3": "^13.0.3",
     "@hono/node-server": "^2.1.4",
     "hono": "^4.13.13",
-    "vitest": "^5.0.3"
+    "vitest": "^5.0.3",
+    "yjs": "^13.6.33"
   }
 }

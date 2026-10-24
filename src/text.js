@@ -9,7 +9,6 @@
 // `plainTextAdapter()` below is the one for plain text; a ProseMirror/TipTap adapter (HTML through
 // y-prosemirror's updateYFragment) lives with the app that knows its editor schema.
 
-import * as defaultY from "yjs";
 import { hash52 } from "./bytes.js";
 
 /**
@@ -124,11 +123,13 @@ export function plainTextAdapter(name = "text") {
 }
 
 /**
- * The engine's Yjs operations for one adapter. `Y` is the Yjs module to make documents with — the
- * app's own when its adapter uses another Yjs library (y-prosemirror, y-tiptap): two copies of Yjs
- * in one process fail each other's instanceof checks (openSync's `yjs` option).
+ * The engine's Yjs operations for one adapter. `Y` is the APP's Yjs module (openSync's `yjs` option):
+ * Yjs must exist once per process — two copies fail each other's instanceof checks and print "Yjs was
+ * already imported" — so this package never imports its own (JustWrite, 2026-10-24: a linked checkout
+ * loaded a second copy beside the app's). The app passes the Yjs it imports, as y-prosemirror's users do.
  */
-export function textOps(adapter, Y = defaultY) {
+export function textOps(adapter, Y) {
+  if (!Y?.Doc) throw new TypeError("text columns need the app's Yjs module — openSync({ yjs })");
   const docFrom = (state) => {
     const doc = new Y.Doc();
     if (state && state.length) Y.applyUpdate(doc, state);

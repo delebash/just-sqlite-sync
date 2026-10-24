@@ -6,7 +6,7 @@ import Database from "better-sqlite3";
 import { describe, expect, it } from "vitest";
 import { LIBRARY_MISMATCH, SCHEMA_TOO_NEW, CLOCK_DRIFT, openSync } from "../src/index.js";
 import { openSync as openSyncBefore } from "./fixtures/engine-35dc1d7/engine.js";
-import { TABLES, dump, exchange, makeDevice, now, setNow } from "./helpers.js";
+import { TABLES, Y, dump, exchange, makeDevice, now, setNow } from "./helpers.js";
 import { settle } from "./sim.js";
 
 function seed(dev) {
@@ -290,7 +290,7 @@ describe("merging: what the longer random runs found", () => {
     expect([bodyOf(a), bodyOf(b)]).toEqual(["the brass lamp was lit at night", "the brass lamp was lit at night"]);
 
     // a takes the new engine on the same database; b stays on the previous one for an exchange
-    a.sync = openSync(a.adapter, { app: "testapp", tables: TABLES, deviceId: "dev-a", deviceName: "a", now });
+    a.sync = openSync(a.adapter, { app: "testapp", tables: TABLES, deviceId: "dev-a", deviceName: "a", now, yjs: Y });
     a.db.exec("UPDATE scenes SET body = 'the old brass lamp was lit at night' WHERE id = 's1'");
     b.db.exec("UPDATE scenes SET body = 'the brass lamp was lit at night, again' WHERE id = 's1'");
     exchange(a, b);
@@ -299,7 +299,7 @@ describe("merging: what the longer random runs found", () => {
     exchange(a, b);
     expect(bodyOf(b)).toBe("the old brass lamp was lit at night, once again");
 
-    b.sync = openSync(b.adapter, { app: "testapp", tables: TABLES, deviceId: "dev-b", deviceName: "b", now });
+    b.sync = openSync(b.adapter, { app: "testapp", tables: TABLES, deviceId: "dev-b", deviceName: "b", now, yjs: Y });
     b.db.exec("UPDATE scenes SET body = 'the old brass lamp was lit at night, once again.' WHERE id = 's1'");
     a.db.exec("UPDATE scenes SET body = 'An old brass lamp was lit at night, once again' WHERE id = 's1'");
     exchange(a, b);

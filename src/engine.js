@@ -143,6 +143,9 @@ export function openSync(db, options) {
       if (!adapter || typeof adapter.apply !== "function" || typeof adapter.render !== "function") {
         throw new SyncError(BAD_CONFIG, `text column ${name}.${col} needs an adapter with apply(doc, value) and render(doc)`);
       }
+      if (!options.yjs?.Doc) {
+        throw new SyncError(BAD_CONFIG, `text column ${name}.${col} needs the app's Yjs module: openSync({ yjs }) — Yjs must exist once per process`);
+      }
       text[col] = textOps(adapter, options.yjs);
     }
     const where = pk.map((c) => `${quoteIdent(c)} = ?`).join(" AND ");

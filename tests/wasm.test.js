@@ -6,7 +6,7 @@
 import sqlite3InitModule from "@sqlite.org/sqlite-wasm";
 import { beforeAll, describe, expect, it } from "vitest";
 import { openSync, sqliteWasmAdapter } from "../src/index.js";
-import { SCHEMA, TABLES, dump, makeDevice, now } from "./helpers.js";
+import { SCHEMA, TABLES, Y, dump, makeDevice, now } from "./helpers.js";
 import { randomOp } from "./sim.js";
 import { rng } from "./helpers.js";
 
@@ -19,7 +19,7 @@ function wasmDevice(name) {
   const db = new sqlite3.oo1.DB(":memory:");
   db.exec("PRAGMA foreign_keys = ON");
   db.exec(SCHEMA);
-  const sync = openSync(sqliteWasmAdapter(db), { app: "testapp", tables: TABLES, deviceId: `dev-${name}`, deviceName: name, now });
+  const sync = openSync(sqliteWasmAdapter(db), { app: "testapp", tables: TABLES, deviceId: `dev-${name}`, deviceName: name, now, yjs: Y });
   // a better-sqlite3-like shim so the shared helpers (dump, randomOp) can drive it
   const shim = {
     prepare(sql) {

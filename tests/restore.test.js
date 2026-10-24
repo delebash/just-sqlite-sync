@@ -11,7 +11,7 @@ import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { BAD_CONFIG, folderSync, openSync, restorePending } from "../src/index.js";
 import { nodeFolder } from "../src/transports/node-folder.js";
-import { TABLES, backupOf, dump, exchange, fileDatabase, makeDevice, now, restore, restoreCopy } from "./helpers.js";
+import { TABLES, Y, backupOf, dump, exchange, fileDatabase, makeDevice, now, restore, restoreCopy } from "./helpers.js";
 import { runWithRestores } from "./sim.js";
 
 let dir;
@@ -178,7 +178,7 @@ describe("restoring a backup", () => {
     const before = a.sync.device;
     restoreCopy(file("a"), backup);
     expect(restorePending(a.adapter)).toBe(true);
-    const reopen = (deviceId) => openSync(a.adapter, { app: "testapp", tables: TABLES, deviceId, now });
+    const reopen = (deviceId) => openSync(a.adapter, { app: "testapp", tables: TABLES, deviceId, now, yjs: Y });
     expect(() => reopen(before)).toThrow(expect.objectContaining({ code: BAD_CONFIG }));
     a.sync = reopen(undefined); // the phone's way: the engine keeps the id in the database
     expect(a.sync.device).not.toBe(before);

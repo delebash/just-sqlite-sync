@@ -122,7 +122,7 @@ export function reachableUrls(port, prefix = "/v1/sync") {
  * @param {{ scope(ids: string[]): (table: string, pk: unknown[]) => boolean, name(ids: string[]): string, extension: string, noun?: string }} opts.units
  *   what a by-hand export holds: the units (books, projects…) the user picked; `noun` names them
  *   in messages ("books")
- * @param {object} [opts.yjs] the app's own Yjs, for rich-text columns
+ * @param {object} [opts.yjs] the app's Yjs module — required with text columns (Yjs must exist once per process)
  * @param {{ badRequest(detail: string): Error, notReady(): Error, refused(e: SyncError): Error,
  *           libraryMismatch?(fromName: string|null): Error }} [opts.errors] how errors reach the client
  * @param {{ warning(msg: string): void }} [opts.log]

@@ -60,7 +60,8 @@ const sync = openSync(betterSqlite3Adapter(db), {
     scenes: { text: { body: plainTextAdapter() } }, // body merges edit by edit
     images: { exclude: ["thumbnail"] },             // a column kept per device
   },
-  // yjs: Y,                      // pass your own Yjs when a text adapter uses y-prosemirror/y-tiptap
+  yjs: Y,                         // with text columns: the Yjs your app imports (import * as Y from "yjs") —
+                                  // Yjs must exist once per process, so the engine never imports its own
 });
 
 // 1 · over HTTP with another device or a server

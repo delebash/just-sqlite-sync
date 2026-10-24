@@ -71,6 +71,15 @@ This file holds what this repo's code depends on.
   deletions (delete set); comparing state vectors alone misses deletions, which add no structs.
 - A Y.Doc's `clientID` can be set after loading a state and before editing; edits then continue
   that client's clock.
+- Yjs must exist once per process: a second copy prints "Yjs was already imported. This breaks
+  constructor checks and will lead to issues!" and fails the other copy's instanceof checks. An app
+  linking this package by `file:` loaded two — the package's own `yjs` (its real path's node_modules)
+  beside the app's — although it passed its own as `openSync({ yjs })` (JustWrite, 2026-10-24). A peer
+  dependency doesn't help a symlinked checkout (the package still resolves its own node_modules), and a
+  lazy load can't be both synchronous and browser-safe here (openSync is synchronous; the core runs in
+  JustWrite's phone worker), so since 2026-10-24 the package imports no Yjs at all: text columns take the
+  app's (`yjs`, required with them — BAD_CONFIG otherwise), as y-prosemirror's users pass theirs; `yjs` is
+  an optional peer and a dev dependency for this package's tests. — *measured, 2026-10-24*.
 
 ## Partial files (a scope)
 
