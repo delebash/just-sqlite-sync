@@ -166,7 +166,9 @@ It keeps this device's identity (`sync-device.json` in the data folder, tied to 
 library key, the paired devices, the last export), a sync shortly after start and then every few
 minutes with the folder and the paired devices, and the routes a sync screen calls:
 `hello`/`pull`/`push` (the engine's), `rev` (moves when another device's changes land — an open
-window polls it and reloads), `status`, `settings`, `folder/libraries`, `folder/run`, `run`,
+window polls it and reloads; given the app's `windows` — the kit's `ChangeCounter` — it moves for the
+other windows' changes on this server too and carries the data's `epoch`, the kit's
+`watchOtherWindows` contract), `status`, `settings`, `folder/libraries`, `folder/run`, `run`,
 `export`, `import` (`?join=1` adopts the file's library), `peer/run`, `pair` (a code with the
 library, its key, a new token and this server's addresses — shown as a QR code) and `pair/join`
 (adopts the code's library and key even when the other device can't be reached, so a shared

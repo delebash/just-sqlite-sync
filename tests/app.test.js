@@ -23,7 +23,7 @@ afterEach(async () => {
  * is a file in the data folder (a restore copies on its own connection), and `make()` builds
  * another app layer on it (the server started again).
  */
-async function makeApp(name, { file = false } = {}) {
+async function makeApp(name, { file = false, windows = undefined } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), `appsync-${name}-`));
   const dbFile = file ? path.join(dir, "app.db") : null;
   const db = dbFile ? fileDatabase(dbFile) : new Database(":memory:");
@@ -48,6 +48,7 @@ async function makeApp(name, { file = false } = {}) {
     },
     units: { scope: (ids) => (t, pk) => t !== "images" && ids.includes(pk[0]), name: (ids) => db.prepare("SELECT title FROM projects WHERE id = ?").get(ids[0])?.title, extension: "tsync" },
     log: { warning() {} },
+    windows,
   });
   const appSync = make();
   appSync.open(dir);
@@ -106,6 +107,17 @@ describe("the app layer", () => {
     expect(phone.appSync.get().library).toBe(laptop.appSync.get().library);
     // the window's poll moved: another device's changes landed
     expect((await (await phone.server.request("/v1/sync/rev")).json()).rev).toBeGreaterThan(0);
+  });
+
+  it("with the app's windows: rev moves for the OTHER windows' changes too and carries the data's epoch; without, as before", async () => {
+    // the kit's ChangeCounter, as the app passes it (a stand-in: this package never imports the kit)
+    const counter = { boot: "b1", epoch: "e1", revFor: (id) => (id === "window-a" ? 0 : 1) };
+    const one = await makeApp("windows", { windows: () => counter });
+    const ask = async (who) => (await one.server.request("/v1/sync/rev", { headers: { "x-client-id": who } })).json();
+    expect(await ask("window-a")).toEqual({ rev: "0:b1:0", epoch: "e1", pollSeconds: 5 });
+    expect(await ask("window-b")).toEqual({ rev: "0:b1:1", epoch: "e1", pollSeconds: 5 });
+    const plain = await makeApp("plain");
+    expect(await (await plain.server.request("/v1/sync/rev")).json()).toEqual({ rev: 0, pollSeconds: 5 });
   });
 
   it("pairing gives a code; joining with it adopts the library and key even when the device is off", async () => {

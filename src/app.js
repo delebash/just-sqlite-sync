@@ -123,6 +123,10 @@ export function reachableUrls(port, prefix = "/v1/sync") {
  *   what a by-hand export holds: the units (books, projects…) the user picked; `noun` names them
  *   in messages ("books")
  * @param {object} [opts.yjs] the app's Yjs module — required with text columns (Yjs must exist once per process)
+ * @param {object|(() => object)} [opts.windows] the app's windows on this one server — the kit's `ChangeCounter`
+ *   (`@delebash/core/platform`, its window_changes.js), or a function answering it: `rev` then moves for the
+ *   other windows' changes too, not only another device's, and carries the data's `epoch` (a restore or a reset
+ *   elsewhere reloads the window) — the kit's watchOtherWindows reads it. Without it the answer is as before.
  * @param {{ badRequest(detail: string): Error, notReady(): Error, refused(e: SyncError): Error,
  *           libraryMismatch?(fromName: string|null): Error }} [opts.errors] how errors reach the client
  * @param {{ warning(msg: string): void }} [opts.log]
@@ -149,6 +153,7 @@ export function createAppSync(opts) {
   const errors = { ...DEFAULT_ERRORS, ...(opts.errors ?? {}) };
   const log = opts.log ?? { warning: (m) => console.warn(m) };
   const readJson = opts.readJson ?? plainJson;
+  const windowsOf = typeof opts.windows === "function" ? opts.windows : opts.windows ? () => opts.windows : null;
 
   let current = null; // { sync, dataDir }
   let rev = 0; // moves whenever another device's changes land here — the window reloads
@@ -425,7 +430,14 @@ export function createAppSync(opts) {
   function routes(server) {
     registerSyncRoutes(server, need, { prefix, readJson });
 
-    server.get(`${prefix}/rev`, (c) => c.json({ rev, pollSeconds: Number(readSettings().pollSeconds) || 5 }));
+    server.get(`${prefix}/rev`, (c) => {
+      const pollSeconds = Number(readSettings().pollSeconds) || 5;
+      const w = windowsOf?.();
+      if (!w) return c.json({ rev, pollSeconds });
+      // another device's changes, and the OTHER windows' on this server (their X-Client-Id apart): opaque — the
+      // window compares it whole; the counter's boot id in it makes a server started again a change too
+      return c.json({ rev: `${rev}:${w.boot}:${w.revFor(c.req.header("x-client-id") || null)}`, epoch: w.epoch, pollSeconds });
+    });
 
     server.get(`${prefix}/status`, (c) => {
       const s = need();
