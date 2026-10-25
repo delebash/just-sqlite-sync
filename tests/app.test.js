@@ -120,6 +120,15 @@ describe("the app layer", () => {
     expect(await (await plain.server.request("/v1/sync/rev")).json()).toEqual({ rev: 0, pollSeconds: 5 });
   });
 
+  it("flush answers how many fields it stamped — a write to synced rows, else 0", async () => {
+    const one = await makeApp("flushcount");
+    one.db.exec("INSERT INTO projects VALUES ('p1', 'The Lamp', 'Mira');");
+    expect(one.appSync.flush()).toBeGreaterThan(0);
+    expect(one.appSync.flush()).toBe(0); // nothing new since
+    one.db.exec("UPDATE projects SET title = 'The Lamp' WHERE id = 'p1';"); // the same value: no change to stamp
+    expect(one.appSync.flush()).toBe(0);
+  });
+
   it("pairing gives a code; joining with it adopts the library and key even when the device is off", async () => {
     const laptop = await makeApp("laptop");
     const r = await (await laptop.server.request("/v1/sync/pair", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({}) })).json();

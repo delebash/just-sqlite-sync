@@ -237,12 +237,15 @@ export function createAppSync(opts) {
 
   const get = () => current?.sync ?? null;
 
-  /** Stamp what the triggers noted — after every write request and before every sync. */
+  /** Stamp what the triggers noted — after every write request and before every sync. Returns how many fields it
+   *  stamped (the engine's flush): 0 when nothing changed, it failed, or no engine is open — so an app can tell a
+   *  request that changed synced rows (a change another window re-reads) from one that didn't. */
   function flush() {
     try {
-      current?.sync.flush();
+      return current?.sync.flush() ?? 0;
     } catch (e) {
       log.warning(`sync flush failed: ${e?.message ?? e}`);
+      return 0;
     }
   }
 
