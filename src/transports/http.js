@@ -17,7 +17,9 @@ export function createSyncHandlers(getSync, { onApplied } = {}) {
       return { app: s.app, library: s.library, device: s.device, name: s.deviceName, schema: s.schemaVersion, vector: s.vector() };
     },
     pull(body) {
-      return sync().changesSince(body?.vector ?? {});
+      const s = sync();
+      s.noteHeld(body?.vector); // what the caller already holds of this device's changes
+      return s.changesSince(body?.vector ?? {});
     },
     push(body) {
       const s = sync();
@@ -71,6 +73,7 @@ export async function syncWithPeer(sync, { url, token, fetch: fetchImpl = global
   onApplied?.(pulled);
   const outgoing = sync.changesSince(hello.vector);
   const pushed = await call(fetchImpl, `${base}/push`, { method: "POST", headers, body: JSON.stringify(outgoing) });
+  if (!pushed?.stale) sync.noteHeld(outgoing.vector);
   sync.recordPeer(hello.device, { name: hello.name, kind: "http", info: { url: base } });
   return { peer: { device: hello.device, name: hello.name }, pulled, pushed: { sent: outgoing.changes.length, ...pushed } };
 }

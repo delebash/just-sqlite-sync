@@ -45,6 +45,21 @@ describe("HTTP sync", () => {
     expect(laptop.sync.peers().map((p) => p.name)).toContain("phone");
   });
 
+  it("changes waiting: a device's changes count until another device holds them, its own only", async () => {
+    const laptop = makeDevice("laptop");
+    laptop.db.exec("INSERT INTO projects VALUES ('p1', 'Book', NULL); INSERT INTO chapters VALUES ('p1', 'c1', 0, 'One');");
+    expect(laptop.sync.unsent()).toBe(2); // not stamped yet: they count
+    const url = await serve(laptop);
+    const phone = makeDevice("phone");
+    await syncWithPeer(phone.sync, { url, join: true });
+    expect(phone.sync.unsent()).toBe(0); // what it received is not its own
+    expect(laptop.sync.unsent()).toBe(0); // the phone's push said it holds them
+    phone.db.exec("UPDATE chapters SET title = 'Written on the bus' WHERE id = 'c1'");
+    expect(phone.sync.unsent()).toBe(1);
+    await syncWithPeer(phone.sync, { url });
+    expect(phone.sync.unsent()).toBe(0); // its push went through
+  });
+
   it("a wrong token is a clear error", async () => {
     const laptop = makeDevice("laptop");
     const url = await serve(laptop, { token: "right" });

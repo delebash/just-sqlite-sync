@@ -353,6 +353,7 @@ export function createAppSync(opts) {
     const started = new Date().toISOString();
     try {
       const r = await folderSync(need(), platform.folder(cfg.folder), { key: libraryKey(), name: "folder" }).sync();
+      need().noteHeld(need().getState("folder.pushVector")); // the cloud folder holds what this device wrote there
       lastRun.folder = { at: started, ok: true, pulled: r.pulled.applied, pushed: r.pushed.written, problems: r.pulled.problems.length };
     } catch (e) {
       lastRun.folder = { at: started, ok: false, error: String(e?.message ?? e), code: e?.code ?? null };
@@ -451,6 +452,8 @@ export function createAppSync(opts) {
         deviceName: s.deviceName,
         library: s.library,
         rev,
+        // this device's changed rows that no other device or the cloud folder holds yet
+        waiting: s.unsent(),
         peers: s.peers(),
         settings: {
           deviceName: cfg.deviceName,

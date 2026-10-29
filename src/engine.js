@@ -304,6 +304,26 @@ export function openSync(db, options) {
     return out;
   }
 
+  // --- what has left this device ------------------------------------------------------------
+  // The highest of this device's own sequence numbers another device or the cloud folder is known to
+  // hold — a full batch's vector says what its sender holds of every origin, this one too; a push that
+  // went through and this device's folder files say it of where they went. The phone's own copy of
+  // its files (the storage guard) never counts: it is not another device.
+  const sentKey = () => `sent:${device}`;
+  function noteHeld(peerVector) {
+    const n = Number(peerVector?.[device] ?? 0);
+    if (n > Number(getMeta(sentKey()) ?? 0)) setMeta(sentKey(), n);
+  }
+  /** The rows this device changed that no other device or folder holds yet ("Changes waiting"); a
+   *  change not yet stamped counts too. Reads only. */
+  function unsent() {
+    const held = Number(getMeta(sentKey()) ?? 0);
+    return db.get(
+      `SELECT count(*) AS n FROM (SELECT tbl, pk FROM sync_clock WHERE origin = ? AND oseq > ? UNION SELECT tbl, pk FROM sync_pending)`,
+      [device, held],
+    ).n;
+  }
+
   // --- outgoing -------------------------------------------------------------------------------
   /**
    * The changes a device holding `peerVector` lacks.
@@ -437,6 +457,8 @@ export function openSync(db, options) {
             if (origin === device) continue;
             db.run("INSERT INTO sync_vector (origin, seq) VALUES (?, ?) ON CONFLICT(origin) DO UPDATE SET seq = max(seq, excluded.seq)", [origin, n]);
           }
+          // what its sender holds of this device's changes (this device's own files coming back say nothing)
+          if (batch.from !== device) noteHeld(batch.vector);
         }
         setMeta("seq", seq);
       } finally {
@@ -691,6 +713,11 @@ export function openSync(db, options) {
     apply,
     flush: () => flush(),
     recordPeer,
+    /** Another device or the cloud folder holds this device's changes up to `peerVector[device]` (the
+     *  transports call it: a push that went through, a pull that said what the caller holds). */
+    noteHeld,
+    /** How many rows this device changed that haven't left it yet. */
+    unsent,
     /** Forget a device this one synced with (the user retired it — its folder files removed): it leaves the list. */
     forgetPeer: (id) => db.run("DELETE FROM sync_peers WHERE id = ?", [String(id)]),
     /** The devices and places this one has synced with, newest first. An entry that was this

@@ -125,6 +125,7 @@ way.
 | `sync.flush()` | Stamps the changes the triggers noted since the last flush. Call it after your saves (an `onResponse` hook on write routes is one place); it also runs before every read or apply. |
 | `sync.vector()` | This device's vector. |
 | `sync.library` / `sync.device` / `sync.deviceName` | Identity. `setDeviceName(name)`, `joinLibrary(id)`. |
+| `sync.unsent()` / `sync.noteHeld(vector)` | "Changes waiting": the rows this device changed that no other device or the cloud folder holds yet (a change not yet stamped counts). What another device holds of this one's is learned from its full batches, a pull that sends its vector and a push that went through; a transport of your own calls `noteHeld` with the vector it delivered. The phone's own copy of its files is not another device. `appSync`'s `status` carries it as `waiting`. |
 | `sync.peers()` | The devices and places this one has synced with, newest first. An entry that was this device before a restore carries `retired: { name, at }` — the name it had and the restore's time (ISO) — so a devices list can say so. |
 | `syncWithPeer(sync, { url, token, join })` | Pull then push with another device's routes. |
 | `createSyncHandlers(sync)` | The three routes' bodies for any web framework (`hello`, `pull`, `push`). |

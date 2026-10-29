@@ -326,6 +326,24 @@ describe("the app layer: restoring a backup", () => {
     expect((await one.server.request(`/v1/sync/folder/devices/${old}`, { method: "DELETE" })).status).toBe(400); // no folder set
   });
 
+  it("changes waiting: the rows this device changed that no other device or the cloud folder holds yet", async () => {
+    const one = await makeApp("one", { file: true });
+    const folder = path.join(one.dir, "cloud");
+    const waiting = async (x) => (await (await x.server.request("/v1/sync/status")).json()).waiting;
+    const useFolder = (x) =>
+      x.server.request("/v1/sync/settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ autoMinutes: 0, folder }) });
+    await useFolder(one);
+    expect(await waiting(one)).toBe(0);
+    one.db.exec("INSERT INTO projects VALUES ('p1', 'The Lamp', NULL)"); // not stamped yet: it counts
+    expect(await waiting(one)).toBe(1);
+    one.write("INSERT INTO projects VALUES ('p2', 'The Kite', NULL)");
+    expect(await waiting(one)).toBe(2);
+    expect(await one.appSync.runFolder()).toMatchObject({ ok: true }); // written to the folder: sent
+    expect(await waiting(one)).toBe(0);
+    one.write("UPDATE projects SET title = 'The Lamp II' WHERE id = 'p1'");
+    expect(await waiting(one)).toBe(1);
+  });
+
   it("the server stopped right after the copy: the next start continues as a new device", async () => {
     const one = await makeApp("one", { file: true });
     one.write("INSERT INTO projects VALUES ('p1', 'The Lamp', NULL)");
