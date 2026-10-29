@@ -491,6 +491,26 @@ export function createAppSync(opts) {
       return c.json({ libraries: await folderSync(need(), platform.folder(String(folder))).libraries() });
     });
 
+    /** Retire a device from the sync folder (a device no longer used stayed there for good — the kit's finish list,
+     *  2026-10-29): a folder sync first, so this device has relayed everything that one wrote (folder.js), then its
+     *  files go and it leaves the device list. A sync that fails first removes nothing. Never this device; a device
+     *  still in use comes back at its next sync. */
+    server.delete(`${prefix}/folder/devices/:id`, async (c) => {
+      const cfg = readSettings();
+      if (!cfg.folder) throw errors.badRequest("no sync folder is set");
+      const id = c.req.param("id");
+      const run = await runFolder();
+      if (!run?.ok) throw errors.refused(new SyncError("sync-first-failed", `the folder couldn't be synced first, so nothing was removed: ${run?.error ?? "no answer"}`));
+      try {
+        await folderSync(need(), platform.folder(cfg.folder), { key: libraryKey(), name: "folder" }).removeDevice(id);
+      } catch (e) {
+        if (e instanceof SyncError) throw errors.refused(e);
+        throw e;
+      }
+      need().forgetPeer(id);
+      return c.json({ removed: id });
+    });
+
     server.post(`${prefix}/folder/run`, async (c) => {
       const r = await runFolder();
       if (!r) throw errors.badRequest("no sync folder is set");

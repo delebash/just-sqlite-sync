@@ -296,6 +296,36 @@ describe("the app layer: restoring a backup", () => {
     expect(Number.isFinite(Date.parse(status.peers[0].retired.at))).toBe(true);
   });
 
+  it("removing a device from the folder: a sync first, then its files go and it leaves the list; never this device", async () => {
+    const one = await makeApp("one", { file: true });
+    const folder = path.join(one.dir, "cloud");
+    await one.server.request("/v1/sync/settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ deviceName: "Studio PC", autoMinutes: 0, folder }) });
+    one.write("INSERT INTO projects VALUES ('p1', 'The Lamp', NULL)");
+    expect(await one.appSync.runFolder()).toMatchObject({ ok: true });
+    const old = one.appSync.get().device;
+    restoreThrough(one, backupOf(one, "backup")); // the old device id stays in the folder: a device no longer used
+    expect(await one.appSync.runFolder()).toMatchObject({ ok: true });
+    const devicesIn = async () => {
+      const r = await one.server.request("/v1/sync/folder/libraries", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+      return (await r.json()).libraries.flatMap((l) => l.devices.map((d) => d.device));
+    };
+    expect(await devicesIn()).toContain(old);
+
+    const self = await one.server.request(`/v1/sync/folder/devices/${one.appSync.get().device}`, { method: "DELETE" });
+    expect(self.status).toBe(409); // never this device
+
+    const r = await one.server.request(`/v1/sync/folder/devices/${old}`, { method: "DELETE" });
+    expect(r.status).toBe(200);
+    expect(await r.json()).toEqual({ removed: old });
+    expect(await devicesIn()).not.toContain(old);
+    const status = await (await one.server.request("/v1/sync/status")).json();
+    expect(status.peers.map((p) => p.id)).not.toContain(old);
+    expect(titles(one)).toEqual(["The Lamp"]); // what it wrote was relayed before it went
+
+    one.putRow("sync", JSON.stringify({ deviceName: "Studio PC", autoMinutes: 0, folder: null, peers: [] }));
+    expect((await one.server.request(`/v1/sync/folder/devices/${old}`, { method: "DELETE" })).status).toBe(400); // no folder set
+  });
+
   it("the server stopped right after the copy: the next start continues as a new device", async () => {
     const one = await makeApp("one", { file: true });
     one.write("INSERT INTO projects VALUES ('p1', 'The Lamp', NULL)");

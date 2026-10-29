@@ -168,7 +168,9 @@ minutes with the folder and the paired devices, and the routes a sync screen cal
 `hello`/`pull`/`push` (the engine's), `rev` (moves when another device's changes land — an open
 window polls it and reloads; given the app's `windows` — the kit's `ChangeCounter` — it moves for the
 other windows' changes on this server too and carries the data's `epoch`, the kit's
-`watchOtherWindows` contract), `status`, `settings`, `folder/libraries`, `folder/run`, `run`,
+`watchOtherWindows` contract), `status`, `settings`, `folder/libraries`, `folder/run`, `folder/devices/:id`
+(DELETE: a device retired from the folder — a folder sync first, so this device has relayed what it
+wrote, then its files go and it leaves the list; never this device), `run`,
 `export`, `import` (`?join=1` adopts the file's library), `peer/run`, `pair` (a code with the
 library, its key, a new token and this server's addresses — shown as a QR code) and `pair/join`
 (adopts the code's library and key even when the other device can't be reached, so a shared
@@ -178,7 +180,7 @@ folder still carries the changes). JustWrite and JustVoice use it.
 `afterTables`): this device continues as a new device in sync — a new id in `sync-device.json`
 (`newIdentity(dataDir)`), the old one an origin holding what the backup held — so the other
 devices' newer work comes back and wins. It shows in the other devices' lists as a new entry beside
-the old one, and its old folder subfolder stays until removed. In this device's own list the old
+the old one, and its old folder subfolder stays until removed (`folder/devices/:id`). In this device's own list the old
 id is an entry too (its folder copy is read like any other device's); `status`'s `peers` mark it
 `retired: { name, at }`, and the kit's sync screen names it "‹name› (before the restore on
 ‹date›)". This device's own `sync` settings

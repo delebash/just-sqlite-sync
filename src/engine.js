@@ -691,6 +691,8 @@ export function openSync(db, options) {
     apply,
     flush: () => flush(),
     recordPeer,
+    /** Forget a device this one synced with (the user retired it — its folder files removed): it leaves the list. */
+    forgetPeer: (id) => db.run("DELETE FROM sync_peers WHERE id = ?", [String(id)]),
     /** The devices and places this one has synced with, newest first. An entry that was this
      * device before a restore carries `retired: { name, at }` — the name it had, the restore's time. */
     peers: () => {
