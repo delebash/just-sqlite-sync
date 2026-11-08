@@ -13,7 +13,7 @@ JavaScript ES modules (`.js` only, `"type": "module"`), no native code, no TypeS
 - Every change to merging, recording or vectors must keep `tests/convergence.test.js` and
   `tests/wasm.test.js` green; when touching them, also run thousands of seeds once
   (`tests/sim.js` → `runOnce(seed, steps)`).
-- `npm test` and `npm run lint` pass before a commit. Every file carries an SPDX header.
+- `npm test` and `npm run lint` run once, when the job's whole list is done (never before each commit). Every file carries an SPDX header.
 
 Claude Code reads this file through CLAUDE.md's `@AGENTS.md`; Codex, Cursor and the other tools read it
 directly and follow no `@` imports — so it holds everything itself, the family rules included (the
